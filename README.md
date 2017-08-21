@@ -6,14 +6,14 @@ Version 1.0.4-101
 
 
 To build the driver outside of a kernel tree.
-make -f Makefile.alt
+  - make -f Makefile.alt
 
 A dkms.conf file is included in the source for use with DKMS.
 
 DKMS helps insure a driver (like smartpqi) rebuilds for each kernel update
 that happens on a system.
-  http://linux.dell.com/dkms
-  http://help.ubuntu.com/community/DKMS
+  - http://linux.dell.com/dkms
+  - http://help.ubuntu.com/community/DKMS
 
 Steps for using DKMS and the smartpqi driver source with Ubuntu:
   - Insure dkms and compiler tools are installed.
@@ -29,6 +29,8 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 To provide kernel/driver development feedback, send email to 
 esc.storagedev@microsemi.com.
+
 License: GPLv2
+
 August 2017
 
