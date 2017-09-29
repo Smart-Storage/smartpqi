@@ -1,6 +1,11 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.1.2-120 (September 2017)
+  - Updates made to PQI resets.
+  - PCI ID updates.
+  - Enhanced BMIC cache flush support.
+
 Version 1.0.4-101
   - Initial public driver release.
 
