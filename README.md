@@ -1,6 +1,10 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.1.2-125 (November 2017)
+  - PCI ID updates
+  - Error message update
+
 Version 1.1.2-120 (September 2017)
   - Updates made to PQI resets.
   - PCI ID updates.
@@ -28,6 +32,7 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
     - Note DKMS does not support the "-" in the version number. 
       Substitute with ".".
     - EX. cp -a smartpqi-1.0.4 /usr/src/smartpqi-1.0.4.101
+  - Move Makefile.alt to Makefile
   - dkms add -m smartpqi -v 1.0.4.101
   - dkms build -m smartpqi -v 1.0.4.101
   - dkms install -m smartpqi -v 1.0.4.101
@@ -37,5 +42,5 @@ esc.storagedev@microsemi.com.
 
 License: GPLv2
 
-August 2017
+November 2017
 

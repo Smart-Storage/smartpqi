@@ -74,7 +74,12 @@
 #endif
 
 #if !defined(PCI_EXP_DEVCTL2_COMP_TIMEOUT)
+#define PCI_EXP_DEVCTL2_COMP_TIMEOUT	0x000f
+#if TORTUGA
+#define KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT		1
+#else
 #define KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT		0
+#endif
 #endif
 
 #if defined(RHEL6)
@@ -104,7 +109,7 @@
 #if defined(SLES12SP0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
-#elif defined(UBUNTU1404)
+#elif defined(UBUNTU1404) || TORTUGA
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #elif defined(OL7U2)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
@@ -270,7 +275,6 @@ void scsi_sanitize_inquiry_string(unsigned char *s, int len);
 #if !KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT
 
 #define PCI_EXP_DEVCTL2			40	/* Device Control 2 */
-#define PCI_EXP_DEVCTL2_COMP_TIMEOUT	0x000f
 
 int pcie_capability_clear_and_set_word(struct pci_dev *dev, int pos,
 	u16 clear, u16 set);
