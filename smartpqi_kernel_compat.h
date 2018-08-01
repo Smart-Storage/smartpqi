@@ -40,10 +40,13 @@
 
 /* ----- RHEL7 variants --------- */
 #if \
-	defined(RHEL7U0) || \
-	defined(RHEL7U1) || \
-	defined(RHEL7U2) || \
-	defined(RHEL7U3)
+	defined(RHEL7U0)    || \
+	defined(RHEL7U1)    || \
+	defined(RHEL7U2)    || \
+	defined(RHEL7U4)    || \
+	defined(RHEL7U4ARM) || \
+	defined(RHEL7U5)    || \
+	defined(RHEL7U5ARM)
 #define RHEL7
 #endif
 
@@ -63,6 +66,16 @@
 	defined(SLES12SP1) || \
 	defined(SLES12SP2)
 #define SLES12
+#endif
+
+/* ----- SLES15 variants --------- */
+#if \
+	defined(SLES15SP0) || \
+	defined(SLES15SP1) || \
+	defined(SLES15SP2) || \
+	defined(SLES15SP3) || \
+	defined(SLES15SP4)
+#define SLES15
 #endif
 
 #include <scsi/scsi_tcq.h>
@@ -85,12 +98,17 @@
 #if defined(RHEL6)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_2011_03_QUEUECOMMAND		0
-#if defined(RHEL6U4) || defined(RHEL6U5)
+#if defined(RHEL6U3) || defined(RHEL6U4) || defined(RHEL6U5)
+#if defined(RHEL6U3)
+#define KFEATURE_HAS_DMA_ZALLOC_COHERENT		0
+#endif
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
 #elif defined(RHEL7)
 #if defined(RHEL7U0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
+#elif defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
+#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #endif
 #elif defined(SLES11)
 #if defined(SLES11SP0) || defined(SLES11SP1)
@@ -109,10 +127,15 @@
 #if defined(SLES12SP0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
-#elif defined(UBUNTU1404) || TORTUGA
+#elif defined(SLES15)
+#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
+#elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
-#elif defined(OL7U2)
+#elif defined(OL7U2) || defined(KCLASS3B)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
+#endif
+#if defined(KCLASS4B)
+#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -141,6 +164,9 @@
 #endif
 #if !defined(KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT)
 #define KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT		1
+#endif
+#if !defined(KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH)
+#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		0
 #endif
 
 #if !defined(list_next_entry)
@@ -190,6 +216,10 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 #define PCI_DEVICE_SUB(vend, dev, subvend, subdev) \
 	.vendor = (vend), .device = (dev), \
 	.subvendor = (subvend), .subdevice = (subdev)
+#endif
+
+#if !defined(PCI_VENDOR_ID_ADVANTECH)
+#define PCI_VENDOR_ID_ADVANTECH		0x13fe
 #endif
 
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *template);
@@ -296,5 +326,14 @@ static inline u16 pqi_get_hw_queue(struct pqi_ctrl_info *ctrl_info,
 
 	return hw_queue;
 }
+
+#if !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH
+
+static inline bool blk_rq_is_passthrough(struct request *rq)
+{
+	return rq->cmd_type != REQ_TYPE_FS;
+}
+
+#endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
 
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */

@@ -145,6 +145,41 @@ void scsi_sanitize_inquiry_string(unsigned char *s, int len)
 
 #if !KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT
 
+#if defined(RHEL6U3)
+/*
+ * Note that these accessor functions are only for the "PCI Express
+ * Capability" (see PCIe spec r3.0, sec 7.8).  They do not apply to the
+ * other "PCI Express Extended Capabilities" (AER, VC, ACS, MFVC, etc.)
+ */
+int pcie_capability_read_word(struct pci_dev *dev, int pos, u16 *val)
+{
+	int ret;
+
+	*val = 0;
+	if (pos & 1)
+		return -EINVAL;
+
+	ret = pci_read_config_word(dev, pci_pcie_cap(dev) + pos, val);
+	/*
+	 * Reset *val to 0 if pci_read_config_word() fails, it may
+	 * have been written as 0xFFFF if hardware error happens
+	 * during pci_read_config_word().
+	 */
+	if (ret)
+		*val = 0;
+	return ret;
+}
+
+int pcie_capability_write_word(struct pci_dev *dev, int pos, u16 val)
+{
+	if (pos & 1)
+		return -EINVAL;
+
+	return pci_write_config_word(dev, pci_pcie_cap(dev) + pos, val);
+}
+
+#endif /* RHEL6U3 */
+
 int pcie_capability_clear_and_set_word(struct pci_dev *dev, int pos,
 	u16 clear, u16 set)
 {
@@ -162,4 +197,3 @@ int pcie_capability_clear_and_set_word(struct pci_dev *dev, int pos,
 }
 
 #endif
-

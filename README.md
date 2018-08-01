@@ -1,6 +1,14 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.1.4-132 (July 2018)
+  - A repackaged version of this driver was release as 1.1.4-133, no driver
+    code was changed from the 1.1.4-132.
+  - Change made to the reading of PQI index registers for ARM64.
+  - Improved "driver busy" handling and error checking for synchronous requests.
+  - Some kernel compatibility updates.
+  - PCI ID updates
+
 Version 1.1.2-125 (November 2017)
   - PCI ID updates
   - Error message update
@@ -42,5 +50,5 @@ esc.storagedev@microsemi.com.
 
 License: GPLv2
 
-November 2017
+August 2018
 
