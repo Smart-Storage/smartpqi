@@ -5,6 +5,8 @@ Version 1.1.4-132 (July 2018)
   - A repackaged version of this driver was release as 1.1.4-133, no driver
     code was changed from the 1.1.4-132.
   - Change made to the reading of PQI index registers for ARM64.
+
+Version 1.1.4-125 (June 2018)
   - Improved "driver busy" handling and error checking for synchronous requests.
   - Some kernel compatibility updates.
   - PCI ID updates
