@@ -5,12 +5,98 @@ smartpqi-objs := smartpqi_init.o smartpqi_sis.o smartpqi_sas_transport.o smartpq
 ifeq (${KVER},)
 	KVER := $(shell echo `uname -r`)
 endif
+KVER_SHORT := $(shell echo $(KVER) | sed -r -e 's,(^[0-9]+\.[0-9]+).*,\1,')
+KVERSION := $(shell echo $(KVER) | sed -r -e 's,(^[0-9]+)\.[0-9]+.*,\1,')
+KMAJOR := $(shell echo $(KVER) | sed -r -e 's,^[0-9]+\.([0-9]+).*,\1,')
 
+KERNEL_CLASS := $(shell \
+   if [ $(KVERSION) -eq 3 ]; \
+   then \
+      if [ $(KMAJOR) -lt 5 ]; \
+      then \
+         echo "KCLASS$(KVERSION)A"; \
+      elif [ $(KMAJOR) -lt 11 ]; \
+      then \
+         echo "KCLASS$(KVERSION)B"; \
+      elif [ $(KMAJOR) -lt 19 ]; \
+      then \
+         echo "KCLASS$(KVERSION)C"; \
+      else \
+         echo "KCLASS$(KVERSION)D"; \
+      fi; \
+   elif [ $(KVERSION) -eq 4 ]; \
+   then \
+      if [ $(KMAJOR) -lt 11 ]; \
+      then \
+         echo "KCLASS$(KVERSION)A"; \
+      elif [ $(KMAJOR) -lt 15 ]; \
+      then \
+         echo "KCLASS$(KVERSION)B"; \
+      else \
+         echo "KCLASS$(KVERSION)C"; \
+      fi; \
+   fi; \
+)
+
+OSVENDOR := $(shell \
+   if [ -f /etc/redhat-release ]; \
+   then \
+      if [ -n "`egrep 'Maipo|release 7' /etc/redhat-release`" -a \
+           $(KVER_SHORT) = "3.10" ]; \
+      then \
+         UPDATE=`grep "release 7" /etc/redhat-release | \
+            sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
+         echo "RHEL7U$${UPDATE}"; \
+      elif [ -n "`egrep 'Santiago|release 6' /etc/redhat-release`" -a \
+             $(KVER_SHORT) = "2.6" ]; \
+      then \
+         UPDATE=`cat /etc/redhat-release | \
+            sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
+         echo "RHEL6U$${UPDATE}"; \
+      else \
+         echo "KERNEL"; \
+      fi; \
+   elif [ -f /etc/SuSE-release ]; \
+   then \
+      if [ -n "`grep 'Enterprise Server 12' /etc/SuSE-release`" -a \
+           $(KVER_SHORT) = "3.12" ]; \
+      then \
+         PATCHLEVEL=`grep PATCHLEVEL /etc/SuSE-release | awk '{ print $$3 }'`; \
+         echo "SLES12SP$${PATCHLEVEL}"; \
+      elif [ -n "`grep 'Enterprise Server 11' /etc/SuSE-release`" -a \
+             $(KVER_SHORT) = "2.6" -o $(KVER_SHORT) = "3.0" ]; \
+      then \
+         PATCHLEVEL=`grep PATCHLEVEL /etc/SuSE-release | awk '{ print $$3 }'`; \
+         echo "SLES11SP$${PATCHLEVEL}"; \
+      else \
+         echo "KERNEL"; \
+      fi; \
+   elif [ -f /etc/os-release ]; \
+   then \
+      if [ -n "`grep 'Enterprise Server 15' /etc/os-release`" ]; \
+      then \
+		echo "SLES15"; \
+      else \
+         echo "KERNEL"; \
+      fi; \
+   else \
+      echo "KERNEL"; \
+   fi; \
+)
+
+COMPAT_SWITCH := $(shell \
+   if [ "$(OSVENDOR)" = "KERNEL" ]; \
+   then \
+      echo "EXTRA_CFLAGS+=-D$(KERNEL_CLASS)"; \
+   else \
+      echo "EXTRA_CFLAGS+=-D$(OSVENDOR)"; \
+   fi; \
+)
 KDIR  := /lib/modules/$(KVER)/build
 PWD   := $(shell pwd)
 
 default:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) $(COMPAT_SWITCH) modules
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
