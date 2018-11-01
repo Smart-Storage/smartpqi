@@ -346,6 +346,6 @@ struct sas_function_template pqi_sas_transport_functions = {
 	.phy_setup = pqi_sas_phy_setup,
 	.phy_release = pqi_sas_phy_release,
 	.set_phy_speed = pqi_sas_phy_speed,
-	.smp_handler = pqi_sas_smp_handler,
+	.smp_handler = (void *) NULL,
 };
 

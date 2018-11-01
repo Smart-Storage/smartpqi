@@ -327,13 +327,4 @@ static inline u16 pqi_get_hw_queue(struct pqi_ctrl_info *ctrl_info,
 	return hw_queue;
 }
 
-#if !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH
-
-static inline bool blk_rq_is_passthrough(struct request *rq)
-{
-	return rq->cmd_type != REQ_TYPE_FS;
-}
-
-#endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
-
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */
