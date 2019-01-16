@@ -34,7 +34,8 @@
 	defined(RHEL6U6) || \
 	defined(RHEL6U7) || \
 	defined(RHEL6U8) || \
-	defined(RHEL6U9)
+	defined(RHEL6U9) || \
+	defined(RHEL6U10)
 #define RHEL6
 #endif
 
@@ -134,11 +135,15 @@
 #elif defined(OL7U2) || defined(KCLASS3B)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #endif
-#if defined(KCLASS4B)
+#if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
+
+#if !defined(from_timer)
+#define KFEATURE_HAS_OLD_TIMER				1
+#endif
 
 /* default values */
 #if !defined(KFEATURE_HAS_WAIT_FOR_COMPLETION_IO)
@@ -167,6 +172,9 @@
 #endif
 #if !defined(KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		0
+#endif
+#if !defined(KFEATURE_HAS_OLD_TIMER)
+#define KFEATURE_HAS_OLD_TIMER				0
 #endif
 
 #if !defined(list_next_entry)
@@ -335,5 +343,23 @@ static inline bool blk_rq_is_passthrough(struct request *rq)
 }
 
 #endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
+
+#if KFEATURE_HAS_OLD_TIMER
+#define from_timer(var, callback_timer, timer_fieldname) \
+	container_of(callback_timer, typeof(*var), timer_fieldname)
+
+#if !defined(TIMER_DATA_TYPE)
+#define TIMER_DATA_TYPE unsigned long
+#define TIMER_FUNC_TYPE void (*)(TIMER_DATA_TYPE)
+#endif
+static inline void timer_setup (struct timer_list *timer,
+		void (*func) (struct timer_list *),
+		unsigned long data)
+{
+	init_timer(timer);
+	timer->function = (TIMER_FUNC_TYPE) func;
+	timer->data = (unsigned long) timer;
+}
+#endif  /* KFEATURE_HAS_OLD_TIMER */
 
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */

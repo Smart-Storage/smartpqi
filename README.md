@@ -1,6 +1,9 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.1.4-138 (December 2018)
+  - Minor update to build on kernel released in SuSE Enterprise Linux 12 SP 4
+
 Version 1.1.4-132 (July 2018)
   - A repackaged version of this driver was release as 1.1.4-133, no driver
     code was changed from the 1.1.4-132.

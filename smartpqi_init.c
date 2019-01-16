@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.1.4-132"
+#define DRIVER_VERSION		"1.1.4-138"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		1
 #define DRIVER_RELEASE		4
-#define DRIVER_REVISION		132
+#define DRIVER_REVISION		138
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -56,10 +56,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-ece092b/s-d00db51)" " (d147/s325)");
+	DRIVER_VERSION " (d-9755896/s-809509d)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-ece092b/s-d00db51)");
+	DRIVER_VERSION " (d-9755896/s-809509d)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -2931,11 +2931,12 @@ out:
 
 #define PQI_HEARTBEAT_TIMER_INTERVAL	(10 * HZ)
 
-static void pqi_heartbeat_timer_handler(unsigned long data)
+static void pqi_heartbeat_timer_handler(struct timer_list *t)
 {
 	int num_interrupts;
 	u32 heartbeat_count;
-	struct pqi_ctrl_info *ctrl_info = (struct pqi_ctrl_info *)data;
+	struct pqi_ctrl_info *ctrl_info = from_timer(ctrl_info, t,
+						heartbeat_timer);
 
 	pqi_check_ctrl_health(ctrl_info);
 	if (pqi_ctrl_offline(ctrl_info))
@@ -2972,8 +2973,6 @@ static void pqi_start_heartbeat_timer(struct pqi_ctrl_info *ctrl_info)
 
 	ctrl_info->heartbeat_timer.expires =
 		jiffies + PQI_HEARTBEAT_TIMER_INTERVAL;
-	ctrl_info->heartbeat_timer.data = (unsigned long)ctrl_info;
-	ctrl_info->heartbeat_timer.function = pqi_heartbeat_timer_handler;
 	add_timer(&ctrl_info->heartbeat_timer);
 }
 
@@ -6534,7 +6533,7 @@ static struct pqi_ctrl_info *pqi_alloc_ctrl_info(int numa_node)
 	INIT_DELAYED_WORK(&ctrl_info->rescan_work, pqi_rescan_worker);
 	INIT_DELAYED_WORK(&ctrl_info->update_time_work, pqi_update_time_worker);
 
-	init_timer(&ctrl_info->heartbeat_timer);
+	timer_setup(&ctrl_info->heartbeat_timer, pqi_heartbeat_timer_handler, 0);
 	INIT_WORK(&ctrl_info->ctrl_offline_work, pqi_ctrl_offline_worker);
 
 	sema_init(&ctrl_info->sync_request_sem,

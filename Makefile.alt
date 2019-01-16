@@ -29,7 +29,7 @@ KERNEL_CLASS := $(shell \
       if [ $(KMAJOR) -lt 11 ]; \
       then \
          echo "KCLASS$(KVERSION)A"; \
-      elif [ $(KMAJOR) -lt 15 ]; \
+      elif [ $(KMAJOR) -lt 14 ]; \
       then \
          echo "KCLASS$(KVERSION)B"; \
       else \
