@@ -34,6 +34,7 @@
 #define SIS_REENABLE_SIS_MODE			0x1
 #define SIS_ENABLE_MSIX				0x40
 #define SIS_ENABLE_INTX				0x80
+#define SIS_SOFT_RESET				0x100
 #define SIS_CMD_READY				0x200
 #define SIS_TRIGGER_SHUTDOWN			0x800000
 #define SIS_PQI_RESET_QUIESCE			0x1000000
@@ -94,7 +95,7 @@ static int sis_wait_for_ctrl_ready_with_timeout(struct pqi_ctrl_info *ctrl_info,
 	unsigned long timeout;
 	u32 status;
 
-	timeout = (timeout_secs * HZ) + jiffies;
+	timeout = (timeout_secs * PQI_HZ) + jiffies;
 
 	while (1) {
 		status = readl(&ctrl_info->registers->sis_firmware_status);
@@ -206,7 +207,7 @@ static int sis_send_sync_cmd(struct pqi_ctrl_info *ctrl_info,
 	 * the top of the loop in order to give the controller time to start
 	 * processing the command before we start polling.
 	 */
-	timeout = (SIS_CMD_COMPLETE_TIMEOUT_SECS * HZ) + jiffies;
+	timeout = (SIS_CMD_COMPLETE_TIMEOUT_SECS * PQI_HZ) + jiffies;
 	while (1) {
 		msleep(SIS_CMD_COMPLETE_POLL_INTERVAL_MSECS);
 		doorbell = readl(&registers->sis_ctrl_to_host_doorbell);
@@ -353,7 +354,7 @@ static int sis_wait_for_doorbell_bit_to_clear(
 	u32 doorbell_register;
 	unsigned long timeout;
 
-	timeout = (SIS_DOORBELL_BIT_CLEAR_TIMEOUT_SECS * HZ) + jiffies;
+	timeout = (SIS_DOORBELL_BIT_CLEAR_TIMEOUT_SECS * PQI_HZ) + jiffies;
 
 	while (1) {
 		doorbell_register =
@@ -423,6 +424,12 @@ void sis_write_driver_scratch(struct pqi_ctrl_info *ctrl_info, u32 value)
 u32 sis_read_driver_scratch(struct pqi_ctrl_info *ctrl_info)
 {
 	return readl(&ctrl_info->registers->sis_driver_scratch);
+}
+
+void sis_soft_reset(struct pqi_ctrl_info *ctrl_info)
+{
+	writel(SIS_SOFT_RESET,
+		&ctrl_info->registers->sis_host_to_ctrl_doorbell);
 }
 
 static void __attribute__((unused)) verify_structures(void)

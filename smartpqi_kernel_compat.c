@@ -17,6 +17,7 @@
  */
 
 #include <linux/pci.h>
+#include <linux/bsg-lib.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include "smartpqi.h"
@@ -197,3 +198,107 @@ int pcie_capability_clear_and_set_word(struct pci_dev *dev, int pos,
 }
 
 #endif
+
+#if !KFEATURE_HAS_BSG_JOB_SMP_HANDLER
+
+static int pqi_bsg_map_buffer(struct bsg_buffer *buf, struct request *req)
+{
+	size_t sz = (sizeof(struct scatterlist) * req->nr_phys_segments);
+
+	if (!req->nr_phys_segments) {
+		WARN_ON(!req->nr_phys_segments);
+		return -EINVAL;
+	}
+
+	buf->sg_list = kzalloc(sz, GFP_KERNEL);
+	if (!buf->sg_list)
+		return -ENOMEM;
+	sg_init_table(buf->sg_list, req->nr_phys_segments);
+	buf->sg_cnt = blk_rq_map_sg(req->q, req, buf->sg_list);
+	buf->payload_len = blk_rq_bytes(req);
+	return 0;
+}
+
+static int pqi_bsg_prepare_job(struct bsg_job *job, struct request *rq)
+{
+	struct request *rsp = rq->next_rq;
+	int ret;
+#if KFEATURE_HAS_SCSI_REQUEST
+	struct scsi_request *req = scsi_req(rq);
+#else
+	struct request *req = rq;
+#endif
+
+	job->request = req->cmd;
+	job->request_len = req->cmd_len;
+	job->reply = req->sense;
+
+	if (rq->bio) {
+		ret = pqi_bsg_map_buffer(&job->request_payload, rq);
+		if (ret)
+			goto failjob_rls_job;
+	}
+
+	if (rsp && rsp->bio) {
+		ret = pqi_bsg_map_buffer(&job->reply_payload, rsp);
+		if (ret)
+			goto failjob_rls_rqst_payload;
+	}
+
+	return 0;
+
+failjob_rls_rqst_payload:
+	kfree(job->request_payload.sg_list);
+failjob_rls_job:
+	return -ENOMEM;
+}
+
+struct bsg_return_data {
+	int result;
+	unsigned int reply_payload_rcv_len;
+};
+static struct bsg_return_data bsg_ret;
+
+void pqi_bsg_job_done(struct bsg_job *job, int result,
+	unsigned int reply_payload_rcv_len)
+{
+	bsg_ret.result = result;
+	bsg_ret.reply_payload_rcv_len = reply_payload_rcv_len;
+	complete(job->dd_data);
+}
+
+int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
+	struct request *rq)
+{
+	struct bsg_job *job;
+	struct completion bsg_job;
+#if KFEATURE_HAS_SCSI_REQUEST
+	struct scsi_request *req = scsi_req(rq);
+	struct scsi_request *resp = scsi_req(rq->next_rq);
+#else
+	struct request *req = rq;
+	struct request *resp = req->next_rq;
+#endif
+
+	init_completion(&bsg_job);
+	job = kzalloc(sizeof(struct bsg_job), GFP_KERNEL);
+	if (!job)
+		return -ENOMEM;
+	job->dd_data = &bsg_job;
+
+	pqi_bsg_prepare_job(job, rq);
+	pqi_sas_smp_handler(job, shost, rphy);
+
+	wait_for_completion(&bsg_job);
+
+	req->sense_len = job->reply_len;
+	memcpy(req->sense, job->reply, job->reply_len);
+
+	resp->resid_len -= min(bsg_ret.reply_payload_rcv_len, resp->resid_len);
+	req->resid_len = 0;
+
+	kfree(job);
+	return bsg_ret.result;
+}
+
+#endif	/* !KFEATURE_HAS_BSG_JOB_SMP_HANDLER */

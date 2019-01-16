@@ -1,6 +1,14 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.2.4-065 (January 2019)
+  - Added support for OFA events.
+  - Added smp_utils support.
+  - Better handling of LUN resets.
+  - Update to spin up drives when OS resumes.
+  - Enhanced numa node detection.
+  - General code refactoring.
+
 Version 1.1.4-138 (December 2018)
   - Minor update to build on kernel released in SuSE Enterprise Linux 12 SP 4
 

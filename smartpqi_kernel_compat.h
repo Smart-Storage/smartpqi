@@ -80,6 +80,7 @@
 #endif
 
 #include <scsi/scsi_tcq.h>
+#include <linux/bsg-lib.h>
 #if defined(MSG_SIMPLE_TAG)
 #define KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH		0
 #if !defined(RHEL7U3)
@@ -99,6 +100,7 @@
 #if defined(RHEL6)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_2011_03_QUEUECOMMAND		0
+#define KFEATURE_HAS_NO_WRITE_SAME			0
 #if defined(RHEL6U3) || defined(RHEL6U4) || defined(RHEL6U5)
 #if defined(RHEL6U3)
 #define KFEATURE_HAS_DMA_ZALLOC_COHERENT		0
@@ -124,11 +126,13 @@
 #if defined(SLES11SP4)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #endif
+#define KFEATURE_HAS_NO_WRITE_SAME			0
 #elif defined(SLES12)
 #if defined(SLES12SP0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
 #elif defined(SLES15)
+#define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
@@ -137,6 +141,10 @@
 #endif
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
+#define KFEATURE_HAS_SCSI_REQUEST			1
+#endif
+#if defined(KCLASS4C)
+#define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -173,10 +181,19 @@
 #if !defined(KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		0
 #endif
+#if !defined(KFEATURE_HAS_NO_WRITE_SAME)
+#define KFEATURE_HAS_NO_WRITE_SAME			1
+#endif
+#if !defined(KFEATURE_HAS_BSG_JOB_SMP_HANDLER)
+#define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		0
+#endif
+#if !defined(KFEATURE_HAS_SCSI_REQUEST)
+#define KFEATURE_HAS_SCSI_REQUEST			0
+#endif
+
 #if !defined(KFEATURE_HAS_OLD_TIMER)
 #define KFEATURE_HAS_OLD_TIMER				0
 #endif
-
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
 	list_entry((pos)->member.next, typeof(*(pos)), member)
@@ -220,6 +237,10 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 }
 #endif
 
+#if !KFEATURE_HAS_NO_WRITE_SAME
+#define pqi_disable_write_same(x) do {} while(0)
+#endif
+
 #if !defined(PCI_DEVICE_SUB)
 #define PCI_DEVICE_SUB(vend, dev, subvend, subdev) \
 	.vendor = (vend), .device = (dev), \
@@ -257,7 +278,8 @@ static inline unsigned long wait_for_completion_io(struct completion *x)
 static inline void pqi_scsi_done(struct scsi_cmnd *scmd)
 {
 	pqi_prep_for_scsi_done(scmd);
-	scmd->scsi_done(scmd);
+	if (scmd && scmd->scsi_done)
+		scmd->scsi_done(scmd);
 }
 
 #else
@@ -272,9 +294,10 @@ static inline void pqi_scsi_done(struct scsi_cmnd *scmd)
 	void (*scsi_done)(struct scsi_cmnd *);
 
 	pqi_prep_for_scsi_done(scmd);
-
-	scsi_done = (void(*)(struct scsi_cmnd *))scmd->SCp.ptr;
-	scsi_done(scmd);
+	if (scmd) {
+		scsi_done = (void(*)(struct scsi_cmnd *))scmd->SCp.ptr;
+		scsi_done(scmd);
+	}
 }
 
 #endif	/* KFEATURE_HAS_2011_03_QUEUECOMMAND */
@@ -343,6 +366,29 @@ static inline bool blk_rq_is_passthrough(struct request *rq)
 }
 
 #endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
+
+
+#if !KFEATURE_HAS_BSG_JOB_SMP_HANDLER
+
+int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
+	struct request *req);
+
+void pqi_bsg_job_done(struct bsg_job *job, int result,
+	unsigned int reply_payload_rcv_len);
+
+#define PQI_SAS_SMP_HANDLER		pqi_sas_smp_handler_compat
+
+#else
+
+#define PQI_SAS_SMP_HANDLER		pqi_sas_smp_handler
+
+static inline void pqi_bsg_job_done(struct bsg_job *job, int result,
+	unsigned int reply_payload_rcv_len)
+{
+	bsg_job_done(job, result, reply_payload_rcv_len);
+}
+
+#endif	/* KFEATURE_HAS_BSG_JOB_SMP_HANDLER */
 
 #if KFEATURE_HAS_OLD_TIMER
 #define from_timer(var, callback_timer, timer_fieldname) \
