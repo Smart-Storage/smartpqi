@@ -72,7 +72,7 @@ OSVENDOR := $(shell \
    elif [ -f /etc/SuSE-release ]; \
    then \
       if [ -n "`grep 'Enterprise Server 12' /etc/SuSE-release`" -a \
-           $(KVER_SHORT) = "3.12" ]; \
+           $(KVER_SHORT) = "3.12" -o $(KVER_SHORT) = "4.12" ]; \
       then \
          PATCHLEVEL=`grep PATCHLEVEL /etc/SuSE-release | awk '{ print $$3 }'`; \
          echo "SLES12SP$${PATCHLEVEL}"; \

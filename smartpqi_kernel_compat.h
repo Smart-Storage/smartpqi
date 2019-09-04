@@ -82,7 +82,9 @@
 	defined(SLES12SP0) || \
 	defined(SLES12SP1) || \
 	defined(SLES12SP2) || \
-	defined(SLES12SP3)
+	defined(SLES12SP3) || \
+	defined(SLES12SP4) || \
+	defined(SLES12SP5)
 #define SLES12
 #endif
 
@@ -174,14 +176,15 @@
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
-    defined(RHEL8) || defined(KCLASS5A) || defined(KCLASS5B)
+    defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
+    defined(KCLASS5B)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
-    defined(KCLASS5A) || defined(KCLASS5B)
+    defined(KCLASS5A) || defined(KCLASS5B) || defined(SLES12SP5)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
 #if defined(KCLASS3D)
@@ -512,8 +515,12 @@ static inline void timer_setup (struct timer_list *timer,
 static inline unsigned long ktime_get_real_seconds(void)
 {
 	ktime_t tv;
+	struct timeval time;
+
 	tv = ktime_get_real();
-	return tv.tv64;
+	time = ktime_to_timeval(tv);
+
+	return time.tv_sec;
 }
 
 #endif

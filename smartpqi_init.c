@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.2.8-015"
+#define DRIVER_VERSION		"1.2.8-026"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		2
 #define DRIVER_RELEASE		8
-#define DRIVER_REVISION		13
+#define DRIVER_REVISION		22
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -56,10 +56,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-a74526d/s-ceda9f2)" " (d147/s325)");
+	DRIVER_VERSION " (d-ca087b2/s-261a68b)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-a74526d/s-ceda9f2)");
+	DRIVER_VERSION " (d-ca087b2/s-261a68b)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -8052,30 +8052,38 @@ static void pqi_shutdown(struct pci_dev *pci_dev)
 	struct pqi_ctrl_info *ctrl_info;
 
 	ctrl_info = pci_get_drvdata(pci_dev);
-	if (!ctrl_info)
-		goto error;
+	if (!ctrl_info) {
+		dev_err(&pci_dev->dev,
+			"cache could not be flushed\n");
+		return;
+	}
 
-	pqi_ctrl_shutdown_start(ctrl_info);
-	scsi_block_requests(ctrl_info->scsi_host);
-	rc = pqi_ctrl_wait_for_pending_io(ctrl_info, NO_TIMEOUT);
-	if (rc)
-		goto error;
-	rc = pqi_ctrl_wait_for_pending_sync_cmds(ctrl_info);
-	if (rc)
-		goto error;
-
+	pqi_disable_events(ctrl_info);
+	pqi_wait_until_ofa_finished(ctrl_info);
 	/*
 	 * Write all data in the controller's battery-backed cache to
 	 * storage.
 	 */
 	rc = pqi_flush_cache(ctrl_info, SHUTDOWN);
-	pqi_reset(ctrl_info);
-	if (rc == 0)
-		return;
+	if (rc)
+		dev_err(&pci_dev->dev,
+			"unable to flush controller cache\n");
 
-error:
-	dev_warn(&pci_dev->dev,
-		"unable to flush controller cache\n");
+	pqi_ctrl_shutdown_start(ctrl_info);
+	pqi_ctrl_block_requests(ctrl_info);
+
+	rc = pqi_ctrl_wait_for_pending_io(ctrl_info, NO_TIMEOUT);
+	if (rc)
+		dev_err(&pci_dev->dev,
+			"wait for pending I/O failed\n");
+
+	rc = pqi_ctrl_wait_for_pending_sync_cmds(ctrl_info);
+	if (rc)
+		dev_err(&pci_dev->dev,
+			"wait for pending sync cmds failed\n");
+
+	pqi_reset(ctrl_info);
+
 }
 
 static void pqi_process_lockup_action_param(void)
@@ -8332,6 +8340,14 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_ADAPTEC2, 0x0807)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ADAPTEC2, 0x0808)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ADAPTEC2, 0x0809)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,

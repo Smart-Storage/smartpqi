@@ -1,6 +1,12 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.2.8-026 (August 2019)
+  - More controller IDs
+  - Added timestamp compatibility
+  - More shutdown prep by the driver before PQI reset.
+  - Kernel compat for SuSE Enterprise Linux 12 sp5.
+ 
 Version 1.2.8-015 (July 2019)
   - Corrected CCISS_REGNEWD to return good completion once all devices
     are added to the OS.
@@ -8,6 +14,22 @@ Version 1.2.8-015 (July 2019)
     in the pqi_scsi_dev structure.
   - PCI_VENDOR_ID update.
  
+Version 1.2.6-035 (June 2019)
+  - Added support for Red Hat Enterprise Linux 8 kernel compat.
+  - Added support for SuSE Enterprise Linux 15 sp1 kernel compat.
+  - Kernel compat updates for Kernel 5.x.
+  - New controller IDs.
+  - Add a module parameter “expose_ld_first” switch to the smartpqi driver
+    to choose between exposing physical disks or logical volumes to the
+    OS first. 
+  - Add a module parameter which will hide the virtual SEP from being
+    presented to the host.
+  - Driver update to persistently clear IO before PQI reset.
+  - Update to fully convert to the generic DMA APIProblem: Christoph Hellwig
+  - Increased LUN reset timeout.
+  - Increased timeout for firmware status register check.  Accounts for
+    boot delays when bad drives are connected to the controller.
+
 Version 1.2.4-065 (January 2019)
   - Added support for OFA events.
   - Added smp_utils support.
