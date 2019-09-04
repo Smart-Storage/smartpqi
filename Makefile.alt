@@ -34,13 +34,27 @@ KERNEL_CLASS := $(shell \
       else \
          echo "KCLASS$(KVERSION)C"; \
       fi; \
+   elif [ $(KVERSION) -eq 5 ]; \
+   then \
+      if [ $(KMAJOR) -lt 1 ]; \
+      then \
+	echo "KCLASS$(KVERSION)A"; \
+      else \
+        echo "KCLASS$(KVERSION)B"; \
+      fi; \
    fi; \
 )
 
 OSVENDOR := $(shell \
    if [ -f /etc/redhat-release ]; \
    then \
-      if [ -n "`egrep 'Maipo|release 7' /etc/redhat-release`" -a \
+      if [ -n "`egrep 'Ootpa|release 8' /etc/redhat-release`" -a \
+           $(KVER_SHORT) = "4.18" ]; \
+      then \
+         UPDATE=`grep "release 8" /etc/redhat-release | \
+            sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
+         echo "RHEL8U$${UPDATE}"; \
+      elif [ -n "`egrep 'Maipo|release 7' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "3.10" ]; \
       then \
          UPDATE=`grep "release 7" /etc/redhat-release | \
@@ -74,7 +88,14 @@ OSVENDOR := $(shell \
    then \
       if [ -n "`grep 'Enterprise Server 15' /etc/os-release`" ]; \
       then \
-		echo "SLES15"; \
+         SVER=`grep "^VERSION_ID=" /etc/os-release | cut -d "\"" -f 2`; \
+         if [ -n "`echo $$SVER | grep "\."`" ]; \
+         then \
+            PATCHLEVEL=`echo $$SVER | cut -d "." -f 2`; \
+         else \
+            PATCHLEVEL="0"; \
+         fi; \
+         echo "SLES15SP$${PATCHLEVEL}"; \
       else \
          echo "KERNEL"; \
       fi; \

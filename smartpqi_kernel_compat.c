@@ -1,6 +1,6 @@
 /*
  *    driver for Microsemi PQI-based storage controllers
- *    Copyright (c) 2016-2017 Microsemi Corporation
+ *    Copyright (c) 2016-2019 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
  *    This program is free software; you can redistribute it and/or modify
@@ -118,6 +118,12 @@ void pqi_compat_init_scsi_host_template(struct scsi_host_template *hostt)
 	hostt->change_queue_depth = pqi_change_queue_depth;
 	hostt->change_queue_type = pqi_change_queue_type;
 #endif	/* !KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH */
+#if KFEATURE_HAS_LOCKLESS_DISPATCH_IO
+	hostt->lockless = 1;
+#endif
+#if KFEATURE_HAS_USE_CLUSTERING
+	hostt->use_clustering = ENABLE_CLUSTERING;
+#endif
 }
 
 void pqi_compat_init_scsi_host(struct Scsi_Host *shost,

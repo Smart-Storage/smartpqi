@@ -1,6 +1,6 @@
 /*
  *    driver for Microsemi PQI-based storage controllers
- *    Copyright (c) 2016-2017 Microsemi Corporation
+ *    Copyright (c) 2016-2019 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
  *    This program is free software; you can redistribute it and/or modify
@@ -63,7 +63,7 @@
 #if TORTUGA
 #define SIS_CTRL_READY_TIMEOUT_SECS		150
 #else
-#define SIS_CTRL_READY_TIMEOUT_SECS		30
+#define SIS_CTRL_READY_TIMEOUT_SECS		180
 #endif
 #define SIS_CTRL_READY_RESUME_TIMEOUT_SECS	90
 #define SIS_CTRL_READY_POLL_INTERVAL_MSECS	10
@@ -321,9 +321,9 @@ int sis_init_base_struct_addr(struct pqi_ctrl_info *ctrl_info)
 	put_unaligned_le32(ctrl_info->max_io_slots,
 		&base_struct->error_buffer_num_elements);
 
-	bus_address = pci_map_single(ctrl_info->pci_dev, base_struct,
-		sizeof(*base_struct), PCI_DMA_TODEVICE);
-	if (pci_dma_mapping_error(ctrl_info->pci_dev, bus_address)) {
+	bus_address = dma_map_single(&ctrl_info->pci_dev->dev, base_struct,
+		sizeof(*base_struct), DMA_TO_DEVICE);
+	if (dma_mapping_error(&ctrl_info->pci_dev->dev, bus_address)) {
 		rc = -ENOMEM;
 		goto out;
 	}
@@ -336,9 +336,8 @@ int sis_init_base_struct_addr(struct pqi_ctrl_info *ctrl_info)
 	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_INIT_BASE_STRUCT_ADDRESS,
 		&params);
 
-	pci_unmap_single(ctrl_info->pci_dev, bus_address, sizeof(*base_struct),
-		PCI_DMA_TODEVICE);
-
+	dma_unmap_single(&ctrl_info->pci_dev->dev, bus_address,
+			sizeof(*base_struct), DMA_TO_DEVICE);
 out:
 	kfree(base_struct_unaligned);
 

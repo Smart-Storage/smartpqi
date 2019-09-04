@@ -1,6 +1,6 @@
 /*
  *    driver for PMC-Sierra PQI-based storage controllers
- *    Copyright (c) 2016-2017 Microsemi Corporation
+ *    Copyright (c) 2016-2019 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
  *    This program is free software; you can redistribute it and/or modify
@@ -44,11 +44,27 @@
 	defined(RHEL7U0)    || \
 	defined(RHEL7U1)    || \
 	defined(RHEL7U2)    || \
+	defined(RHEL7U3)    || \
 	defined(RHEL7U4)    || \
 	defined(RHEL7U4ARM) || \
 	defined(RHEL7U5)    || \
-	defined(RHEL7U5ARM)
+	defined(RHEL7U5ARM) || \
+	defined(RHEL7U6)    || \
+	defined(RHEL7U7)
 #define RHEL7
+#endif
+
+/* ----- RHEL8 variants --------- */
+#if \
+	defined(RHEL8U0)    || \
+	defined(RHEL8U1)    || \
+	defined(RHEL8U2)    || \
+	defined(RHEL8U3)    || \
+	defined(RHEL8U4)    || \
+	defined(RHEL8U5)    || \
+	defined(RHEL8U6)    || \
+	defined(RHEL8U7)
+#define RHEL8
 #endif
 
 /* ----- SLES11 variants --------- */
@@ -65,7 +81,8 @@
 #if \
 	defined(SLES12SP0) || \
 	defined(SLES12SP1) || \
-	defined(SLES12SP2)
+	defined(SLES12SP2) || \
+	defined(SLES12SP3)
 #define SLES12
 #endif
 
@@ -81,11 +98,21 @@
 
 #include <scsi/scsi_tcq.h>
 #include <linux/bsg-lib.h>
+#include <linux/ktime.h>
+
 #if defined(MSG_SIMPLE_TAG)
 #define KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH		0
 #if !defined(RHEL7U3)
 #define KFEATURE_HAS_MQ_SUPPORT				0
 #endif
+#endif
+
+#if defined (RHEL8)
+#define KFEATURE_HAS_MQ_SUPPORT				0
+#endif
+
+#if defined(XEN7)
+#define KCLASS4A
 #endif
 
 #if !defined(PCI_EXP_DEVCTL2_COMP_TIMEOUT)
@@ -107,44 +134,69 @@
 #endif
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
+#if !defined(RHEL6U0) && !defined(RHEL6U1)
+#define KFEATURE_HAS_LOCKLESS_DISPATCH_IO		1
+#endif
 #elif defined(RHEL7)
 #if defined(RHEL7U0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
-#elif defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
+#endif
+#if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #endif
 #elif defined(SLES11)
-#if defined(SLES11SP0) || defined(SLES11SP1)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
+#define KFEATURE_HAS_NO_WRITE_SAME			0
+#if defined(SLES11SP0) || defined(SLES11SP1)
 #define KFEATURE_HAS_2011_03_QUEUECOMMAND		0
 #endif
 #if defined(SLES11SP3)
-#define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_DMA_ZALLOC_COHERENT		0
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
-#if defined(SLES11SP4)
-#define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
-#endif
-#define KFEATURE_HAS_NO_WRITE_SAME			0
 #elif defined(SLES12)
+#if defined(SLES12SP2) || defined(SLES12SP3)
+#define KFEATURE_HAS_KTIME_SECONDS			1
+#endif
 #if defined(SLES12SP0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
 #elif defined(SLES15)
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
+#define KFEATURE_HAS_KTIME_SECONDS			1
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #elif defined(OL7U2) || defined(KCLASS3B)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #endif
-#if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4)
-#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
-#define KFEATURE_HAS_SCSI_REQUEST			1
+#if defined(KCLASS4A)
+#define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
-#if defined(KCLASS4C)
+#if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
+    defined(RHEL8) || defined(KCLASS5A) || defined(KCLASS5B)
+#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
+#define KFEATURE_HAS_KTIME_SECONDS			1
+#define KFEATURE_HAS_SCSI_REQUEST			1
+#define KFEATURE_HAS_KTIME64				1
+#endif
+#if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
+    defined(KCLASS5A) || defined(KCLASS5B)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
+#endif
+#if defined(KCLASS3D)
+#define KFEATURE_HAS_KTIME_SECONDS			1
+#endif
+#if defined(KCLASS5A) || defined(KCLASS5B)
+#define dma_zalloc_coherent dma_alloc_coherent
+#define shost_use_blk_mq(x) (1)
+#define KFEATURE_HAS_USE_CLUSTERING			0
+#endif
+
+#if defined(KCLASS5B)
+#define IOCTL_INT unsigned int
+#else
+#define IOCTL_INT int
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -190,9 +242,21 @@
 #if !defined(KFEATURE_HAS_SCSI_REQUEST)
 #define KFEATURE_HAS_SCSI_REQUEST			0
 #endif
-
+#if !defined(KFEATURE_HAS_LOCKLESS_DISPATCH_IO)
+#define KFEATURE_HAS_LOCKLESS_DISPATCH_IO		0
+#endif
+#if !defined(KFEATURE_HAS_USE_CLUSTERING)
+#define KFEATURE_HAS_USE_CLUSTERING			1
+#define IOCTL_INT int
+#endif
 #if !defined(KFEATURE_HAS_OLD_TIMER)
 #define KFEATURE_HAS_OLD_TIMER				0
+#endif
+#if !defined(KFEATURE_HAS_KTIME_SECONDS)
+#define KFEATURE_HAS_KTIME_SECONDS			0
+#endif
+#if !defined(KFEATURE_HAS_KTIME64)
+#define KFEATURE_HAS_KTIME64				0
 #endif
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
@@ -249,6 +313,14 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 
 #if !defined(PCI_VENDOR_ID_ADVANTECH)
 #define PCI_VENDOR_ID_ADVANTECH		0x13fe
+#endif
+
+#if !defined(PCI_VENDOR_ID_FIBERHOME)
+#define PCI_VENDOR_ID_FIBERHOME		0x1d8d
+#endif
+
+#if !defined(PCI_VENDOR_ID_GIGABYTE)
+#define PCI_VENDOR_ID_GIGABYTE		0x1458
 #endif
 
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *template);
@@ -348,7 +420,10 @@ static inline u16 pqi_get_hw_queue(struct pqi_ctrl_info *ctrl_info,
 	u16 hw_queue;
 
 #if KFEATURE_HAS_MQ_SUPPORT
-	hw_queue = blk_mq_unique_tag_to_hwq(blk_mq_unique_tag(scmd->request));
+	if (shost_use_blk_mq(scmd->device->host))
+		hw_queue = blk_mq_unique_tag_to_hwq(blk_mq_unique_tag(scmd->request));
+	else
+		hw_queue = smp_processor_id();
 #else
 	hw_queue = smp_processor_id();
 #endif
@@ -407,5 +482,17 @@ static inline void timer_setup (struct timer_list *timer,
 	timer->data = (unsigned long) timer;
 }
 #endif  /* KFEATURE_HAS_OLD_TIMER */
+#if !KFEATURE_HAS_KTIME64
+#define time64_to_tm time_to_tm
+#endif
 
+#if !KFEATURE_HAS_KTIME_SECONDS
+static inline unsigned long ktime_get_real_seconds(void)
+{
+	ktime_t tv;
+	tv = ktime_get_real();
+	return tv.tv64;
+}
+
+#endif
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */
