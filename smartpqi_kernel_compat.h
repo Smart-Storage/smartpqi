@@ -323,6 +323,28 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 #define PCI_VENDOR_ID_GIGABYTE		0x1458
 #endif
 
+#if !defined(PCI_VENDOR_ID_FOXCONN)
+#define PCI_VENDOR_ID_FOXCONN		0x105b
+#endif
+
+#if !defined(PCI_VENDOR_ID_HUAWEI)
+#define PCI_VENDOR_ID_HUAWEI		0x19e5
+#endif
+
+#if !defined(PCI_VENDOR_ID_H3C)
+#define PCI_VENDOR_ID_H3C		0x193d
+#endif
+
+#if !defined(PCI_VENDOR_ID_QUANTA)
+#define PCI_VENDOR_ID_QUANTA		0x152d
+#endif
+
+#if !defined(PCI_VENDOR_ID_INSPUR)
+#define PCI_VENDOR_ID_INSPUR		0x1bd4
+#endif
+
+
+
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *template);
 void pqi_compat_init_scsi_host(struct Scsi_Host *shost,
 	struct pqi_ctrl_info *ctrl_info);

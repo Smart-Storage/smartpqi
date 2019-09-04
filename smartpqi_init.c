@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.2.6-035"
+#define DRIVER_VERSION		"1.2.8-015"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		2
-#define DRIVER_RELEASE		6
-#define DRIVER_REVISION		29
+#define DRIVER_RELEASE		8
+#define DRIVER_REVISION		13
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -56,10 +56,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-41194cd/s-2433859)" " (d147/s325)");
+	DRIVER_VERSION " (d-a74526d/s-ceda9f2)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-41194cd/s-2433859)");
+	DRIVER_VERSION " (d-a74526d/s-ceda9f2)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -1755,6 +1755,9 @@ static void pqi_scsi_update_device(struct pqi_scsi_dev *existing_device,
 	existing_device->active_path_index = new_device->active_path_index;
 	existing_device->path_map = new_device->path_map;
 	existing_device->bay = new_device->bay;
+	existing_device->box_index = new_device->box_index;
+	existing_device->phys_box_on_bus = new_device->phys_box_on_bus;
+	existing_device->phy_connected_dev_type = new_device->phy_connected_dev_type;
 	memcpy(existing_device->box, new_device->box,
 		sizeof(existing_device->box));
 	memcpy(existing_device->phys_connector, new_device->phys_connector,
@@ -2301,7 +2304,7 @@ static int pqi_scan_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 
 	if (!mutex_trylock(&ctrl_info->scan_mutex)) {
 		pqi_schedule_rescan_worker_delayed(ctrl_info);
-
+		rc = -EINPROGRESS;
 	} else {
 		rc = pqi_update_scsi_devices(ctrl_info);
 		if (rc)
@@ -4183,8 +4186,10 @@ static int pqi_submit_raid_request_synchronous(struct pqi_ctrl_info *ctrl_info,
 				return -ETIMEDOUT;
 			msecs_blocked =
 				jiffies_to_msecs(jiffies - start_jiffies);
-			if (msecs_blocked >= timeout_msecs)
-				return -ETIMEDOUT;
+			if (msecs_blocked >= timeout_msecs) {
+				rc = -ETIMEDOUT;
+				goto out;
+			}
 			timeout_msecs -= msecs_blocked;
 		}
 	}
@@ -8166,127 +8171,127 @@ static int pqi_resume(struct pci_dev *pci_dev)
 static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x105b, 0x1211)
+			       PCI_VENDOR_ID_FOXCONN, 0x1211)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x105b, 0x1321)
+			       PCI_VENDOR_ID_FOXCONN, 0x1321)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x152d, 0x8a22)
+			       PCI_VENDOR_ID_QUANTA, 0x8a22)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x152d, 0x8a23)
+			       PCI_VENDOR_ID_QUANTA, 0x8a23)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x152d, 0x8a24)
+			       PCI_VENDOR_ID_QUANTA, 0x8a24)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x152d, 0x8a36)
+			       PCI_VENDOR_ID_QUANTA, 0x8a36)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x152d, 0x8a37)
+			       PCI_VENDOR_ID_QUANTA, 0x8a37)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x1104)
+			       PCI_VENDOR_ID_H3C, 0x1104)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x1105)
+			       PCI_VENDOR_ID_H3C, 0x1105)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x1106)
+			       PCI_VENDOR_ID_H3C, 0x1106)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x1107)
+			       PCI_VENDOR_ID_H3C, 0x1107)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x8460)
+			       PCI_VENDOR_ID_H3C, 0x8460)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0x8461)
+			       PCI_VENDOR_ID_H3C, 0x8461)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0xc460)
+			       PCI_VENDOR_ID_H3C, 0xc460)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0xc461)
+			       PCI_VENDOR_ID_H3C, 0xc461)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0xf460)
+			       PCI_VENDOR_ID_H3C, 0xf460)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x193d, 0xf461)
+			       PCI_VENDOR_ID_H3C, 0xf461)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x0045)
+			       PCI_VENDOR_ID_INSPUR, 0x0045)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x0046)
+			       PCI_VENDOR_ID_INSPUR, 0x0046)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x0047)
+			       PCI_VENDOR_ID_INSPUR, 0x0047)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x0048)
+			       PCI_VENDOR_ID_INSPUR, 0x0048)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x004a)
+			       PCI_VENDOR_ID_INSPUR, 0x004a)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x004b)
+			       PCI_VENDOR_ID_INSPUR, 0x004b)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x004c)
+			       PCI_VENDOR_ID_INSPUR, 0x004c)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1bd4, 0x004f)
+			       PCI_VENDOR_ID_INSPUR, 0x004f)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD227)
+			       PCI_VENDOR_ID_HUAWEI, 0xD227)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD228)
+			       PCI_VENDOR_ID_HUAWEI, 0xD228)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD229)
+			       PCI_VENDOR_ID_HUAWEI, 0xD229)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD22A)
+			       PCI_VENDOR_ID_HUAWEI, 0xD22A)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD22B)
+			       PCI_VENDOR_ID_HUAWEI, 0xD22B)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x19E5, 0xD22C)
+			       PCI_VENDOR_ID_HUAWEI, 0xD22C)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
