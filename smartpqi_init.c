@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.2.8-026"
+#define DRIVER_VERSION		"1.2.10-025"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		2
-#define DRIVER_RELEASE		8
-#define DRIVER_REVISION		22
+#define DRIVER_RELEASE		10
+#define DRIVER_REVISION		21
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -56,10 +56,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-ca087b2/s-261a68b)" " (d147/s325)");
+	DRIVER_VERSION " (d-40b8cec/s-54e66f5)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-ca087b2/s-261a68b)");
+	DRIVER_VERSION " (d-40b8cec/s-54e66f5)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -255,6 +255,11 @@ static inline void pqi_ctrl_unblock_requests(struct pqi_ctrl_info *ctrl_info)
 	scsi_unblock_requests(ctrl_info->scsi_host);
 }
 
+static inline void pqi_ctrl_block_device_reset(struct pqi_ctrl_info *ctrl_info)
+{
+	ctrl_info->block_device_reset = true;
+}
+
 static unsigned long pqi_wait_if_ctrl_blocked(struct pqi_ctrl_info *ctrl_info,
 	unsigned long timeout_msecs)
 {
@@ -373,6 +378,11 @@ static inline void pqi_schedule_rescan_worker_delayed(
 static inline void pqi_cancel_rescan_worker(struct pqi_ctrl_info *ctrl_info)
 {
 	cancel_delayed_work_sync(&ctrl_info->rescan_work);
+}
+
+static inline void pqi_cancel_event_worker(struct pqi_ctrl_info *ctrl_info)
+{
+	cancel_work_sync(&ctrl_info->event_work);
 }
 
 static inline u32 pqi_read_heartbeat_counter(struct pqi_ctrl_info *ctrl_info)
@@ -637,79 +647,6 @@ static inline int pqi_scsi_inquiry(struct pqi_ctrl_info *ctrl_info,
 {
 	return pqi_send_scsi_raid_request(ctrl_info, INQUIRY, scsi3addr,
 		buffer, buffer_length, vpd_page, NULL, NO_TIMEOUT);
-}
-
-static bool pqi_vpd_page_supported(struct pqi_ctrl_info *ctrl_info,
-	u8 *scsi3addr, u16 vpd_page)
-{
-	int rc;
-	int i;
-	int pages;
-	unsigned char *buf, bufsize;
-
-	buf = kzalloc(256, GFP_KERNEL);
-	if (!buf)
-		return false;
-
-	/* Get the size of the page list first */
-	rc = pqi_scsi_inquiry(ctrl_info, scsi3addr,
-				VPD_PAGE | SCSI_VPD_SUPPORTED_PAGES,
-				buf, SCSI_VPD_HEADER_SZ);
-	if (rc != 0)
-		goto exit_unsupported;
-
-	pages = buf[3];
-	if ((pages + SCSI_VPD_HEADER_SZ) <= 255)
-		bufsize = pages + SCSI_VPD_HEADER_SZ;
-	else
-		bufsize = 255;
-
-	/* Get the whole VPD page list */
-	rc = pqi_scsi_inquiry(ctrl_info, scsi3addr,
-				VPD_PAGE | SCSI_VPD_SUPPORTED_PAGES,
-				buf, bufsize);
-	if (rc != 0)
-		goto exit_unsupported;
-
-	pages = buf[3];
-	for (i = 1; i <= pages; i++)
-		if (buf[3 + i] == vpd_page)
-			goto exit_supported;
-
-exit_unsupported:
-	kfree(buf);
-	return false;
-
-exit_supported:
-	kfree(buf);
-	return true;
-}
-
-static int pqi_get_device_id(struct pqi_ctrl_info *ctrl_info,
-	u8 *scsi3addr, u8 *device_id, int buflen)
-{
-	int rc;
-	unsigned char *buf;
-
-	if (!pqi_vpd_page_supported(ctrl_info, scsi3addr, SCSI_VPD_DEVICE_ID))
-		return 1; /* function not supported */
-
-	buf = kzalloc(64, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	rc = pqi_scsi_inquiry(ctrl_info, scsi3addr,
-				VPD_PAGE | SCSI_VPD_DEVICE_ID,
-				buf, 64);
-	if (rc == 0) {
-		if (buflen > 16)
-			buflen = 16;
-		memcpy(device_id, &buf[SCSI_VPD_DEVICE_ID_IDX], buflen);
-	}
-
-	kfree(buf);
-
-	return rc;
 }
 
 static int pqi_identify_physical_device(struct pqi_ctrl_info *ctrl_info,
@@ -1397,14 +1334,6 @@ static int pqi_get_device_info(struct pqi_ctrl_info *ctrl_info,
 			pqi_get_volume_status(ctrl_info, device);
 		}
 	}
-
-	if (pqi_get_device_id(ctrl_info, device->scsi3addr,
-		device->unique_id, sizeof(device->unique_id)) < 0)
-		dev_warn(&ctrl_info->pci_dev->dev,
-			"Can't get device id for scsi %d:%d:%d:%d\n",
-			ctrl_info->scsi_host->host_no,
-			device->bus, device->target,
-			device->lun);
 
 out:
 	kfree(buffer);
@@ -3927,7 +3856,7 @@ static int pqi_create_admin_queues(struct pqi_ctrl_info *ctrl_info)
 		&pqi_registers->admin_oq_pi_addr);
 
 	reg = PQI_ADMIN_IQ_NUM_ELEMENTS |
-		(PQI_ADMIN_OQ_NUM_ELEMENTS) << 8 |
+		(PQI_ADMIN_OQ_NUM_ELEMENTS << 8) |
 		(admin_queues->int_msg_num << 16);
 	writel(reg, &pqi_registers->admin_iq_num_elements);
 	writel(PQI_CREATE_ADMIN_QUEUE_PAIR,
@@ -5480,7 +5409,7 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 
 	pqi_ctrl_busy(ctrl_info);
 	if (pqi_ctrl_blocked(ctrl_info) || pqi_device_in_reset(device) ||
-		pqi_ctrl_in_ofa(ctrl_info)) {
+		pqi_ctrl_in_ofa(ctrl_info) || pqi_ctrl_in_shutdown(ctrl_info)) {
 		rc = SCSI_MLQUEUE_HOST_BUSY;
 		goto out;
 	}
@@ -5747,7 +5676,8 @@ static void pqi_lun_reset_complete(struct pqi_io_request *io_request,
 	complete(waiting);
 }
 
-#define PQI_LUN_RESET_TIMEOUT_SECS	10
+#define PQI_LUN_RESET_TIMEOUT_SECS		30
+#define PQI_LUN_RESET_POLL_COMPLETION_SECS	10
 
 static int pqi_wait_for_lun_reset_completion(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_scsi_dev *device, struct completion *wait)
@@ -5756,7 +5686,7 @@ static int pqi_wait_for_lun_reset_completion(struct pqi_ctrl_info *ctrl_info,
 
 	while (1) {
 		if (wait_for_completion_io_timeout(wait,
-			PQI_LUN_RESET_TIMEOUT_SECS * PQI_HZ)) {
+			PQI_LUN_RESET_POLL_COMPLETION_SECS * PQI_HZ)) {
 			rc = 0;
 			break;
 		}
@@ -5793,6 +5723,8 @@ static int pqi_lun_reset(struct pqi_ctrl_info *ctrl_info,
 	memcpy(request->lun_number, device->scsi3addr,
 		sizeof(request->lun_number));
 	request->task_management_function = SOP_TASK_MANAGEMENT_LUN_RESET;
+	if (ctrl_info->tmf_iu_timeout_supported)
+		put_unaligned_le16(PQI_LUN_RESET_TIMEOUT_SECS, &request->timeout);
 
 	pqi_start_io(ctrl_info,
 		&ctrl_info->queue_groups[PQI_DEFAULT_QUEUE_GROUP], RAID_PATH,
@@ -5822,7 +5754,7 @@ static int _pqi_device_reset(struct pqi_ctrl_info *ctrl_info,
 
 	for (retries = 0;;) {
 		rc = pqi_lun_reset(ctrl_info, device);
-		if (rc != -EAGAIN || ++retries > PQI_LUN_RESET_RETRIES)
+		if (rc == 0 || ++retries > PQI_LUN_RESET_RETRIES)
 			break;
 		msleep(PQI_LUN_RESET_RETRY_INTERVAL_MSECS);
 	}
@@ -5876,17 +5808,17 @@ static int pqi_eh_device_reset_handler(struct scsi_cmnd *scmd)
 		shost->host_no, device->bus, device->target, device->lun);
 
 	pqi_check_ctrl_health(ctrl_info);
-	if (pqi_ctrl_offline(ctrl_info)) {
-		dev_err(&ctrl_info->pci_dev->dev,
-			"controller %u offlined - cannot send device reset\n",
-			ctrl_info->ctrl_id);
+	if (pqi_ctrl_offline(ctrl_info) ||
+		pqi_device_reset_blocked(ctrl_info)) {
 		rc = FAILED;
 		goto out;
 	}
 
 	pqi_wait_until_ofa_finished(ctrl_info);
 
+	atomic_inc(&ctrl_info->sync_cmds_outstanding);
 	rc = pqi_device_reset(ctrl_info, device);
+	atomic_dec(&ctrl_info->sync_cmds_outstanding);
 
 out:
 	dev_err(&ctrl_info->pci_dev->dev,
@@ -6147,6 +6079,9 @@ static int pqi_passthru_ioctl(struct pqi_ctrl_info *ctrl_info, void __user *arg)
 
 	put_unaligned_le16(iu_length, &request.header.iu_length);
 
+	if (ctrl_info->raid_iu_timeout_supported)
+		put_unaligned_le32(iocommand.Request.Timeout, &request.timeout);
+
 	rc = pqi_submit_raid_request_synchronous(ctrl_info, &request.header,
 		PQI_SYNC_FLAGS_INTERRUPTABLE, &pqi_error_info, NO_TIMEOUT);
 
@@ -6364,7 +6299,7 @@ static ssize_t pqi_unique_id_show(struct device *dev,
 	struct scsi_device *sdev;
 	struct pqi_scsi_dev *device;
 	unsigned long flags;
-	unsigned char uid[16];
+	u8 unique_id[16];
 
 	sdev = to_scsi_device(dev);
 	ctrl_info = shost_to_hba(sdev->host);
@@ -6377,17 +6312,23 @@ static ssize_t pqi_unique_id_show(struct device *dev,
 			flags);
 		return -ENODEV;
 	}
-	memcpy(uid, device->unique_id, sizeof(uid));
+
+	if (device->is_physical_device) {
+		memset(unique_id, 0, 8);
+		memcpy(unique_id + 8, &device->wwid, sizeof(device->wwid));
+	} else {
+		memcpy(unique_id, device->volume_id, sizeof(device->volume_id));
+	}
 
 	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
 
 	return snprintf(buffer, PAGE_SIZE,
-			"%02X%02X%02X%02X%02X%02X%02X%02X"
-			"%02X%02X%02X%02X%02X%02X%02X%02X\n",
-			uid[0], uid[1], uid[2], uid[3],
-			uid[4], uid[5], uid[6], uid[7],
-			uid[8], uid[9], uid[10], uid[11],
-			uid[12], uid[13], uid[14], uid[15]);
+		"%02X%02X%02X%02X%02X%02X%02X%02X"
+		"%02X%02X%02X%02X%02X%02X%02X%02X\n",
+		unique_id[0], unique_id[1], unique_id[2], unique_id[3],
+		unique_id[4], unique_id[5], unique_id[6], unique_id[7],
+		unique_id[8], unique_id[9], unique_id[10], unique_id[11],
+		unique_id[12], unique_id[13], unique_id[14], unique_id[15]);
 }
 
 static ssize_t pqi_lunid_show(struct device *dev,
@@ -6926,6 +6867,27 @@ static void pqi_firmware_feature_status(struct pqi_ctrl_info *ctrl_info,
 		firmware_feature->feature_name);
 }
 
+static void pqi_ctrl_update_feature_flags(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_firmware_feature *firmware_feature)
+{
+	switch (firmware_feature->feature_bit) {
+	case PQI_FIRMWARE_FEATURE_SOFT_RESET_HANDSHAKE:
+		ctrl_info->soft_reset_handshake_supported =
+			firmware_feature->enabled;
+		break;
+	case PQI_FIRMWARE_FEATURE_RAID_IU_TIMEOUT:
+		ctrl_info->raid_iu_timeout_supported =
+			firmware_feature->enabled;
+		break;
+	case PQI_FIRMWARE_FEATURE_TMF_IU_TIMEOUT:
+		ctrl_info->tmf_iu_timeout_supported =
+			firmware_feature->enabled;
+		break;
+	}
+
+	pqi_firmware_feature_status(ctrl_info, firmware_feature);
+}
+
 static inline void pqi_firmware_feature_update(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_firmware_feature *firmware_feature)
 {
@@ -6949,7 +6911,17 @@ static struct pqi_firmware_feature pqi_firmware_features[] = {
 	{
 		.feature_name = "New Soft Reset Handshake",
 		.feature_bit = PQI_FIRMWARE_FEATURE_SOFT_RESET_HANDSHAKE,
-		.feature_status = pqi_firmware_feature_status,
+		.feature_status = pqi_ctrl_update_feature_flags,
+	},
+	{
+		.feature_name = "RAID IU Timeout",
+		.feature_bit = PQI_FIRMWARE_FEATURE_RAID_IU_TIMEOUT,
+		.feature_status = pqi_ctrl_update_feature_flags,
+	},
+	{
+		.feature_name = "TMF IU Timeout",
+		.feature_bit = PQI_FIRMWARE_FEATURE_TMF_IU_TIMEOUT,
+		.feature_status = pqi_ctrl_update_feature_flags,
 	},
 };
 
@@ -7003,7 +6975,6 @@ static void pqi_process_firmware_features(
 		return;
 	}
 
-	ctrl_info->soft_reset_handshake_supported = false;
 	for (i = 0; i < ARRAY_SIZE(pqi_firmware_features); i++) {
 		if (!pqi_firmware_features[i].supported)
 			continue;
@@ -7011,9 +6982,6 @@ static void pqi_process_firmware_features(
 			firmware_features_iomem_addr,
 			pqi_firmware_features[i].feature_bit)) {
 				pqi_firmware_features[i].enabled = true;
-				if (pqi_firmware_features[i].feature_bit ==
-				    PQI_FIRMWARE_FEATURE_SOFT_RESET_HANDSHAKE)
-					ctrl_info->soft_reset_handshake_supported = true;
 		}
 		pqi_firmware_feature_update(ctrl_info,
 			&pqi_firmware_features[i]);
@@ -8046,6 +8014,22 @@ static void pqi_pci_remove(struct pci_dev *pci_dev)
 	pqi_remove_ctrl(ctrl_info);
 }
 
+static void pqi_crash_if_pending_command(struct pqi_ctrl_info *ctrl_info)
+{
+	unsigned int i;
+	struct pqi_io_request *io_request;
+	struct scsi_cmnd *scmd;
+
+	for (i = 0; i < ctrl_info->max_io_slots; i++) {
+		io_request = &ctrl_info->io_request_pool[i];
+		if (atomic_read(&io_request->refcount) == 0)
+			continue;
+		scmd = io_request->scmd;
+		BUG_ON(scmd != NULL); /* IO command from SML */
+		BUG_ON(scmd == NULL); /* Non-IO command or driver initiated request */
+	}
+}
+
 static void pqi_shutdown(struct pci_dev *pci_dev)
 {
 	int rc;
@@ -8060,6 +8044,23 @@ static void pqi_shutdown(struct pci_dev *pci_dev)
 
 	pqi_disable_events(ctrl_info);
 	pqi_wait_until_ofa_finished(ctrl_info);
+	pqi_cancel_update_time_worker(ctrl_info);
+	pqi_cancel_rescan_worker(ctrl_info);
+	pqi_cancel_event_worker(ctrl_info);
+
+	pqi_ctrl_shutdown_start(ctrl_info);
+	pqi_ctrl_wait_until_quiesced(ctrl_info);
+
+	rc = pqi_ctrl_wait_for_pending_io(ctrl_info, NO_TIMEOUT);
+	if (rc) {
+		dev_err(&pci_dev->dev,
+			"wait for pending I/O failed\n");
+		return;
+	}
+
+	pqi_ctrl_block_device_reset(ctrl_info);
+	pqi_wait_until_lun_reset_finished(ctrl_info);
+
 	/*
 	 * Write all data in the controller's battery-backed cache to
 	 * storage.
@@ -8069,19 +8070,16 @@ static void pqi_shutdown(struct pci_dev *pci_dev)
 		dev_err(&pci_dev->dev,
 			"unable to flush controller cache\n");
 
-	pqi_ctrl_shutdown_start(ctrl_info);
 	pqi_ctrl_block_requests(ctrl_info);
 
-	rc = pqi_ctrl_wait_for_pending_io(ctrl_info, NO_TIMEOUT);
-	if (rc)
-		dev_err(&pci_dev->dev,
-			"wait for pending I/O failed\n");
-
 	rc = pqi_ctrl_wait_for_pending_sync_cmds(ctrl_info);
-	if (rc)
+	if (rc) {
 		dev_err(&pci_dev->dev,
 			"wait for pending sync cmds failed\n");
+		return;
+	}
 
+	pqi_crash_if_pending_command(ctrl_info);
 	pqi_reset(ctrl_info);
 
 }
@@ -8795,6 +8793,8 @@ static void __attribute__((unused)) verify_structures(void)
 	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
 		cdb) != 32);
 	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
+		timeout) != 60);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
 		sg_descriptors) != 64);
 	BUILD_BUG_ON(sizeof(struct pqi_raid_path_request) !=
 		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
@@ -8948,6 +8948,8 @@ static void __attribute__((unused)) verify_structures(void)
 		request_id) != 8);
 	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
 		nexus_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
+		timeout) != 14);
 	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
 		lun_number) != 16);
 	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,

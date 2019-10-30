@@ -1,6 +1,11 @@
 # smartpqi
 Microsemi PQI Linux Driver 
 
+Version 1.2.10-025 (October 2019)
+  - Corrected unique ID discovery method.
+  - Tuned TMF timeout from 60 down to 30 seconds.
+  - Added support for a timeout on LUN resets.
+
 Version 1.2.8-026 (August 2019)
   - More controller IDs
   - Added timestamp compatibility
