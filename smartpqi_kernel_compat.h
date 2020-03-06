@@ -50,7 +50,8 @@
 	defined(RHEL7U5)    || \
 	defined(RHEL7U5ARM) || \
 	defined(RHEL7U6)    || \
-	defined(RHEL7U7)
+	defined(RHEL7U7)    || \
+	defined(RHEL7U8)
 #define RHEL7
 #endif
 
@@ -101,6 +102,7 @@
 #include <scsi/scsi_tcq.h>
 #include <linux/bsg-lib.h>
 #include <linux/ktime.h>
+#include <linux/dma-mapping.h>
 
 #if defined(MSG_SIMPLE_TAG)
 #define KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH		0
@@ -139,6 +141,9 @@
 #if !defined(RHEL6U0) && !defined(RHEL6U1)
 #define KFEATURE_HAS_LOCKLESS_DISPATCH_IO		1
 #endif
+#if defined(RHEL6U5)
+#define KFEATURE_HAS_DMA_MASK_AND_COHERENT		0
+#endif
 #elif defined(RHEL7)
 #if defined(RHEL7U0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
@@ -170,6 +175,7 @@
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #elif defined(OL7U2) || defined(KCLASS3B)
+#define KFEATURE_HAS_DMA_MASK_AND_COHERENT		0
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #endif
 #if defined(KCLASS4A)
@@ -177,26 +183,27 @@
 #endif
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
-    defined(KCLASS5B)
+    defined(KCLASS5B) || defined(SLES15SP2)
 #define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
-    defined(KCLASS5A) || defined(KCLASS5B) || defined(SLES12SP5)
+    defined(SLES15SP2) || defined(KCLASS5A) || defined(KCLASS5B) || \
+    defined(SLES12SP5)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
 #if defined(KCLASS3D)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
-#if defined(KCLASS5A) || defined(KCLASS5B)
+#if defined(KCLASS5A) || defined(KCLASS5B) || defined(SLES15SP2)
 #define dma_zalloc_coherent dma_alloc_coherent
 #define shost_use_blk_mq(x) (1)
 #define KFEATURE_HAS_USE_CLUSTERING			0
 #endif
 
-#if defined(KCLASS5B)
+#if defined(KCLASS5B) || defined(SLES15SP2)
 #define IOCTL_INT unsigned int
 #else
 #define IOCTL_INT int
@@ -261,6 +268,10 @@
 #if !defined(KFEATURE_HAS_KTIME64)
 #define KFEATURE_HAS_KTIME64				0
 #endif
+#if !defined(KFEATURE_HAS_DMA_MASK_AND_COHERENT)
+#define KFEATURE_HAS_DMA_MASK_AND_COHERENT		1
+#endif
+
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
 	list_entry((pos)->member.next, typeof(*(pos)), member)
@@ -304,9 +315,12 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 }
 #endif
 
-#if !KFEATURE_HAS_NO_WRITE_SAME
-#define pqi_disable_write_same(x) do {} while(0)
+static inline void pqi_disable_write_same(struct scsi_device *sdev)
+{
+#if KFEATURE_HAS_NO_WRITE_SAME
+	sdev->no_write_same = 1;
 #endif
+}
 
 #if !defined(PCI_DEVICE_SUB)
 #define PCI_DEVICE_SUB(vend, dev, subvend, subdev) \
@@ -345,8 +359,6 @@ static inline void writeq(u64 value, volatile void __iomem *addr)
 #if !defined(PCI_VENDOR_ID_INSPUR)
 #define PCI_VENDOR_ID_INSPUR		0x1bd4
 #endif
-
-
 
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *template);
 void pqi_compat_init_scsi_host(struct Scsi_Host *shost,
@@ -467,7 +479,6 @@ static inline bool blk_rq_is_passthrough(struct request *rq)
 
 #endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
 
-
 #if !KFEATURE_HAS_BSG_JOB_SMP_HANDLER
 
 int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
@@ -522,6 +533,18 @@ static inline unsigned long ktime_get_real_seconds(void)
 
 	return time.tv_sec;
 }
-
 #endif
+
+#if !KFEATURE_HAS_DMA_MASK_AND_COHERENT
+static inline int pqi_dma_set_mask_and_coherent(struct device *device, u64 mask)
+{
+	return dma_set_mask(device, mask);
+}
+#else
+static inline int pqi_dma_set_mask_and_coherent(struct device *device, u64 mask)
+{
+	return dma_set_mask_and_coherent(device, mask);
+}
+#endif
+
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */

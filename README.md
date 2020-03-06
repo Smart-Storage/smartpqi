@@ -1,5 +1,17 @@
 # smartpqi
-Microsemi PQI Linux Driver 
+Microchip PQI Linux Driver 
+
+Version 1.2.12-025 (March 2020)
+  - New module parameter to limit LV xfer to 1MB for rotating media.
+    Can improve performance for logical volumes with non-SDD disks.
+    limit_xfer_size_to_1MB={0|1}
+    Default is 0, no limit.  Set to 1 to enable 1MB max.
+  - Correct SME issue during driver load by setting DMA mask and coherent
+    DMA mask.
+  - Code clean up and kernel compatibility updates.
+
+Version 1.2.10-027 (January 2019)
+  - No driver code change. Just new OS binary packages released. 
 
 Version 1.2.10-025 (October 2019)
   - Corrected unique ID discovery method.
@@ -93,9 +105,9 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
   - dkms install -m smartpqi -v 1.0.4.101
 
 To provide kernel/driver development feedback, send email to 
-esc.storagedev@microsemi.com.
+storagedev@microchip.com.
 
 License: GPLv2
 
-August 2018
+March 2020
 
