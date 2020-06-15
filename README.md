@@ -1,6 +1,8 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 1.2.14-010 (April 2020)
+  - Code clean up and kernel compatibility updates.
 Version 1.2.12-025 (March 2020)
   - New module parameter to limit LV xfer to 1MB for rotating media.
     Can improve performance for logical volumes with non-SDD disks.
@@ -109,5 +111,5 @@ storagedev@microchip.com.
 
 License: GPLv2
 
-March 2020
+June 2020
 

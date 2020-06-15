@@ -149,7 +149,6 @@
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
-#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #endif
 #elif defined(SLES11)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
@@ -170,7 +169,6 @@
 #endif
 #elif defined(SLES15)
 #define KFEATURE_HAS_SCSI_REQUEST			1
-#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
@@ -184,7 +182,6 @@
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
     defined(KCLASS5B) || defined(SLES15SP2)
-#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		1
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
@@ -239,9 +236,6 @@
 #endif
 #if !defined(KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT)
 #define KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT		1
-#endif
-#if !defined(KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH)
-#define KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH		0
 #endif
 #if !defined(KFEATURE_HAS_NO_WRITE_SAME)
 #define KFEATURE_HAS_NO_WRITE_SAME			1
@@ -470,7 +464,7 @@ static inline u16 pqi_get_hw_queue(struct pqi_ctrl_info *ctrl_info,
 	return hw_queue;
 }
 
-#if !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH
+#ifdef KFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH
 
 static inline bool blk_rq_is_passthrough(struct request *rq)
 {

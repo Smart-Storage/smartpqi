@@ -500,10 +500,11 @@ static unsigned int pqi_build_sas_smp_handler_reply(
 {
 	sg_copy_from_buffer(job->reply_payload.sg_list,
 		job->reply_payload.sg_cnt, &smp_buf->parameters.response,
-		smp_buf->parameters.response_length);
+		le32_to_cpu(smp_buf->parameters.response_length));
 
-	job->reply_len = error_info->sense_data_length;
-	memcpy(job->reply, error_info->data, error_info->sense_data_length);
+	job->reply_len = le16_to_cpu(error_info->sense_data_length);
+	memcpy(job->reply, error_info->data,
+		le16_to_cpu(error_info->sense_data_length));
 
 	return job->reply_payload.payload_len -
 		get_unaligned_le32(&error_info->data_in_transferred);

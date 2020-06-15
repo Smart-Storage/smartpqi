@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.2.12-025"
+#define DRIVER_VERSION		"1.2.14-010"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		2
-#define DRIVER_RELEASE		12
-#define DRIVER_REVISION		21
+#define DRIVER_RELEASE		14
+#define DRIVER_REVISION		8
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -57,10 +57,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-f9a8570/s-d4ade11)" " (d147/s325)");
+	DRIVER_VERSION " (d-ab4b840/s-e2b313b)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-f9a8570/s-d4ade11)");
+	DRIVER_VERSION " (d-ab4b840/s-e2b313b)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -3220,7 +3220,7 @@ static void pqi_ofa_process_event(struct pqi_ctrl_info *ctrl_info,
 	} else if (event_id == PQI_EVENT_OFA_MEMORY_ALLOCATION) {
 		pqi_acknowledge_event(ctrl_info, event);
 		pqi_ofa_setup_host_buffer(ctrl_info,
-			event->ofa_bytes_requested);
+			le32_to_cpu(event->ofa_bytes_requested));
 		pqi_ofa_host_memory_update(ctrl_info);
 	} else if (event_id == PQI_EVENT_OFA_CANCELLED) {
 		pqi_ofa_free_host_buffer(ctrl_info);
@@ -3837,7 +3837,7 @@ static int pqi_alloc_admin_queues(struct pqi_ctrl_info *ctrl_info)
 		&admin_queues_aligned->iq_element_array;
 	admin_queues->oq_element_array =
 		&admin_queues_aligned->oq_element_array;
-	admin_queues->iq_ci = &admin_queues_aligned->iq_ci;
+	admin_queues->iq_ci = (void __iomem *)&admin_queues_aligned->iq_ci;
 	admin_queues->oq_pi =
 		(pqi_index_t __iomem *)&admin_queues_aligned->oq_pi;
 
@@ -3851,8 +3851,8 @@ static int pqi_alloc_admin_queues(struct pqi_ctrl_info *ctrl_info)
 		ctrl_info->admin_queue_memory_base);
 	admin_queues->iq_ci_bus_addr =
 		ctrl_info->admin_queue_memory_base_dma_handle +
-		((void *)admin_queues->iq_ci -
-		ctrl_info->admin_queue_memory_base);
+		((void __iomem *)admin_queues->iq_ci -
+		(void __iomem *)ctrl_info->admin_queue_memory_base);
 	admin_queues->oq_pi_bus_addr =
 		ctrl_info->admin_queue_memory_base_dma_handle +
 		((void __iomem *)admin_queues->oq_pi -
@@ -6208,12 +6208,6 @@ static ssize_t pqi_firmware_version_show(struct device *dev,
 static ssize_t pqi_driver_version_show(struct device *dev,
 	struct device_attribute *attr, char *buffer)
 {
-	struct Scsi_Host *shost;
-	struct pqi_ctrl_info *ctrl_info;
-
-	shost = class_to_shost(dev);
-	ctrl_info = shost_to_hba(shost);
-
 	return snprintf(buffer, PAGE_SIZE, "%s\n",
 		DRIVER_VERSION BUILD_TIMESTAMP);
 }
@@ -6793,7 +6787,7 @@ static inline bool pqi_is_firmware_feature_supported(
 
 	byte_index = bit_position / BITS_PER_BYTE;
 
-	if (byte_index >= firmware_features->num_elements)
+	if (byte_index >= le16_to_cpu(firmware_features->num_elements))
 		return false;
 
 	return firmware_features->features_supported[byte_index] &
@@ -6809,13 +6803,13 @@ static inline bool pqi_is_firmware_feature_enabled(
 	u8 __iomem *features_enabled_iomem_addr;
 
 	byte_index = (bit_position / BITS_PER_BYTE) +
-		(firmware_features->num_elements * 2);
+		(le16_to_cpu(firmware_features->num_elements) * 2);
 
 	features_enabled_iomem_addr = firmware_features_iomem_addr +
 		offsetof(struct pqi_config_table_firmware_features,
 			features_supported) + byte_index;
 
-	return *features_enabled_iomem_addr &
+	return *((__force u8 *)features_enabled_iomem_addr) &
 		(1 << (bit_position % BITS_PER_BYTE)) ? true : false;
 }
 
@@ -6826,7 +6820,7 @@ static inline void pqi_request_firmware_feature(
 	unsigned int byte_index;
 
 	byte_index = (bit_position / BITS_PER_BYTE) +
-		firmware_features->num_elements;
+		le16_to_cpu(firmware_features->num_elements);
 
 	firmware_features->features_supported[byte_index] |=
 		(1 << (bit_position % BITS_PER_BYTE));
@@ -6861,13 +6855,13 @@ static int pqi_enable_firmware_features(struct pqi_ctrl_info *ctrl_info,
 	void __iomem *features_requested_iomem_addr;
 
 	features_requested = firmware_features->features_supported +
-		firmware_features->num_elements;
+		le16_to_cpu(firmware_features->num_elements);
 
 	features_requested_iomem_addr = firmware_features_iomem_addr +
 		(features_requested - (void *)firmware_features);
 
 	memcpy_toio(features_requested_iomem_addr, features_requested,
-		firmware_features->num_elements);
+		le16_to_cpu(firmware_features->num_elements));
 
 	return pqi_config_table_update(ctrl_info,
 		PQI_CONFIG_TABLE_SECTION_FIRMWARE_FEATURES,
@@ -7779,7 +7773,8 @@ static int pqi_ofa_alloc_host_buffer(struct pqi_ctrl_info *ctrl_info)
 	u32 min_chunk_size;
 	u32 chunk_sz;
 
-	total_size = ctrl_info->pqi_ofa_mem_virt_addr->bytes_allocated;
+	total_size = le32_to_cpu(
+			ctrl_info->pqi_ofa_mem_virt_addr->bytes_allocated);
 	min_chunk_size = total_size / PQI_OFA_MAX_SG_DESCRIPTORS;
 
 	for (chunk_sz = total_size; chunk_sz >= min_chunk_size; chunk_sz /= 2)
@@ -7807,7 +7802,7 @@ static void pqi_ofa_setup_host_buffer(struct pqi_ctrl_info *ctrl_info,
 	put_unaligned_le16(PQI_OFA_VERSION, &pqi_ofa_memory->version);
 	memcpy(&pqi_ofa_memory->signature, PQI_OFA_SIGNATURE,
 					sizeof(pqi_ofa_memory->signature));
-	pqi_ofa_memory->bytes_allocated = bytes_requested;
+	pqi_ofa_memory->bytes_allocated = cpu_to_le32(bytes_requested);
 
 	ctrl_info->pqi_ofa_mem_virt_addr = pqi_ofa_memory;
 

@@ -115,8 +115,20 @@ COMPAT_SWITCH := $(shell \
 KDIR  := /lib/modules/$(KVER)/build
 PWD   := $(shell pwd)
 
+BLK := $(shell \
+   GF=`find -L /lib/modules/$(KVER) -name blkdev.h | tail -1`; \
+   grep blk_rq_is_passthrough $${GF}; \
+)
+
+MORE_CFLAGS := $(shell \
+   if [ -z "$(BLK)" ]; \
+   then \
+      echo "EXTRA_CFLAGS+=-DKFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH"; \
+   fi; \
+)
+
 default:
-	$(MAKE) -C $(KDIR) M=$(PWD) $(COMPAT_SWITCH) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) $(COMPAT_SWITCH) $(MORE_CFLAGS) modules
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
