@@ -1,0 +1,456 @@
+.\" Copyright (C) 2019-2020, Microchip Technology Inc. and its subsidiaries
+.\" Copyright (C) 2016-2018, Microsemi Corporation
+.\" Copyright (C) 2016, PMC-Sierra, Inc.
+.\" Written by Kevin Barnett <kevin.barnett@microchip.com>
+.\"
+.\" %%%LICENSE_START(GPLv2_ONELINE)
+.\" Licensed under GNU General Public License version 2 (GPLv2)
+.\" %%%LICENSE_END
+.TH SMARTPQI 4 2017-10-19 "Linux" "Linux Programmer's Manual"
+.SH NAME
+smartpqi \- Microchip Smart Storage SCSI driver
+.SH SYNOPSIS
+.SY "modprobe smartpqi"
+.RB [ disable_device_id_wildcards= { 0 | 1 }]
+.RB [ disable_heartbeat= { 0 | 1 }]
+.RB [ disable_ctrl_shutdown= { 0 | 1 }]
+.RB [ lockup_action= { none | reboot | panic }]
+.RB [ expose_ld_first= { 0 | 1 }]
+.RB [ hide_vsep= { 0 | 1 }]
+.RB [ limit_xfer_size_to_1MB= { 0 | 1 }]
+.YS
+.SH DESCRIPTION
+.B smartpqi
+is a SCSI driver for Microchip Smart Storage controllers.
+.SS Supported \f[BI]ioctl\fP\/() operations
+For compatibility with applications written for the
+.BR cciss (4)
+and
+.BR hpsa (4)
+drivers, many, but not all of the
+.BR ioctl (2)
+operations supported by the
+.B hpsa
+driver are also supported by the
+.B smartpqi
+driver.
+The data structures used by these operations
+are described in the Linux kernel source file
+.IR include/linux/cciss_ioctl.h .
+.TP
+.BR CCISS_DEREGDISK ", " CCISS_REGNEWDISK ", " CCISS_REGNEWD
+These operations
+all do exactly the same thing, which is to cause the driver to re-scan
+for new devices.
+This does exactly the same thing as writing to the
+.BR smartpqi -specific
+host
+.I rescan
+attribute.
+.TP
+.B CCISS_GETPCIINFO
+This operation Returns the PCI domain, bus,
+device and function and "board ID" (PCI subsystem ID).
+.TP
+.B CCISS_GETDRIVVER
+This operation returns the driver version in four bytes, encoded as:
+.IP
+.in +4n
+.EX
+(major_version << 28) | (minor_version << 24) |
+        (release << 16) | revision
+.EE
+.in
+.TP
+.B CCISS_PASSTHRU
+Allows BMIC and CISS commands to be passed through to the controller.
+.SS Boot options
+.TP
+.BR disable_device_id_wildcards= { 0 | 1 }
+Disables support for device ID wildcards.
+The default value is 0 (wildcards are enabled).
+.TP
+.BR disable_heartbeat= { 0 | 1 }
+Disables support for the controller's heartbeat check.
+This parameter is used for debugging purposes.
+The default value is 0 (the controller's heartbeat check is enabled).
+.TP
+.BR disable_ctrl_shutdown= { 0 | 1 }
+Disables support for shutting down the controller in the
+event of a controller lockup.
+The default value is 0 (controller will be shut down).
+.TP
+.BR lockup_action= { none | reboot | panic }
+Specifies the action the driver takes when a controller
+lockup is detected.
+The default action is
+.BR none .
+.nf
+.ta 10n +10n
+
+parameter	action
+---------	----------------------------
+\fBnone\fP	take controller offline only
+\fBreboot\fP	reboot the system
+\fBpanic\fP	panic the system
+.fi
+.TP
+.BR expose_ld_first= { 0 | 1 }
+This option exposes logical devices to the OS before physical devices.
+The default value is 0 (physical devices exposed first).
+.TP
+.BR hide_vsep= { 0 | 1 }
+This option disables exposure of the virtual SEP to the OS.
+The default value is 0 (virtual SEP is exposed).
+.TP
+.BR limit_xfer_size_to_1MB= { 0 | 1 }
+This option sets a maximum transfer size of 1 MiB for logical volumes.
+.RS
+.BR
+.nf
+.ta 10n +10n
+* Only needed for logical volumes created from non-SSD disks and
+  where performance drops are detected.
+* max_sectors_kb can be changed without this parameter.
+.el
+.BR
+  For example:
+       echo 1024 > /sys/block/sds/queue/max_sectors_kb
+  Note: the above method is not persistent across reboots.
+  max_sectors_kb is set by the sd driver based on information from:
+       INQUIRY VPD page 0xB0 "Optimal Transfer Length"
+* The default value is 0 (no limit on transfer sizes).
+.RE
+.fi
+.TE
+.SH FILES
+.SS Device nodes
+Disk drives are accessed via the SCSI disk driver
+.RI ( sd ),
+tape drives via the SCSI tape driver
+.RI ( st ),
+and the RAID controller via the SCSI generic driver
+.RI ( sg ),
+with device nodes named
+.IR /dev/sd *,
+.IR /dev/st *,
+and
+.IR /dev/sg *,
+respectively.
+.SS smartpqi-specific host attribute files in \f[BI]/sys\fP
+.TP
+.IR /sys/class/scsi_host/host * /rescan
+The host
+.I rescan
+attribute is a write-only attribute.
+Writing to this attribute will cause the driver to scan for new,
+changed, or removed devices (e.g., hot-plugged tape drives, or newly
+configured or deleted logical volumes) and notify the SCSI mid-layer of
+any changes detected.
+Usually this action is triggered automatically by configuration
+changes, so the user should not normally have to write to this file.
+Doing so may be useful when hot-plugging devices such as tape drives or
+entire storage boxes containing pre-configured logical volumes.
+.TP
+.IR /sys/class/scsi_host/host * /lockup_action
+The host
+.I lockup_action
+attribute is a read/write attribute.
+This attribute will cause the driver to perform a specific action in the
+unlikely event that a controller lockup has been detected.
+See
+.BR OPTIONS
+above
+for an explanation of the
+.I lockup_action
+values.
+.TP
+.IR /sys/class/scsi_host/host*/driver_version
+The
+.I driver_version
+attribute is read-only.
+This attribute contains the smartpqi driver version.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_host/host1/driver_version
+1.1.2-126
+.EE
+.in
+.TP
+.IR /sys/class/scsi_host/host*/firmware_version
+The
+.I firmware_version
+attribute is read-only.
+This attribute contains the controller firmware version.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_host/host1/firmware_version
+1.29-112
+.EE
+.in
+.TP
+.IR /sys/class/scsi_host/host*/model
+The
+.I model
+attribute is read-only.
+This attribute contains the product identification string of the controller.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_host/host1/model
+1100-16i
+.EE
+.in
+.TP
+.IR /sys/class/scsi_host/host*/serial_number
+The
+.I serial_number
+attribute is read-only.
+This attribute contains the unique identification number of the controller.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_host/host1/serial_number
+6A316373777
+.EE
+.in
+.TP
+.IR /sys/class/scsi_host/host*/vendor
+The
+.I vendor
+attribute is read-only.
+This attribute contains the vendor identification string of the controller.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_host/host1/vendor
+Adaptec
+.EE
+.TP
+.IR /sys/class/scsi_host/host*/enable_stream_detection
+The
+.I enable_stream_detection
+attribute is read-write.
+This attribute enables/disables stream detection in the driver.
+Enabling stream detection can improve sequential write performance for ioaccel-enabled volumes. See the
+.BI ssd_smart_path_enabled
+disk attribute section for details on ioaccel-enabled volumes.
+The default value is 1 (stream detection enabled).
+.IP
+Enable example:
+.IP
+.in +2n
+.EX
+$ \c
+.B echo 1 > /sys/class/scsi_host/host1/enable_stream_detection
+.EE
+.TP
+.IR /sys/class/scsi_host/host*/enable_r5_writes
+The
+.I enable_r5_writes
+attribute is read-write.
+This attribute enables/disables RAID 5 write operations for ioaccel-enabled volumes.
+Enabling can improve sequential write performance. See the
+.BI ssd_smart_path_enabled
+disk attribute section for details on ioaccel-enabled volumes.
+The default value is 1 (RAID 5 writes enabled).
+.IP
+Enable example:
+.IP
+.in +2n
+.EX
+$ \c
+.B echo 1 > /sys/class/scsi_host/host1/enable_r5_writes
+.EE
+.TP
+.IR /sys/class/scsi_host/host*/enable_r6_writes
+The
+.I enable_r6_writes
+attribute is read-write.
+This attribute enables/disables RAID 6 write operations for ioaccel-enabled volumes.
+Enabling can improve sequential write performance. See the
+.BI ssd_smart_path_enabled
+disk attribute section for details on ioaccel-enabled volumes.
+The default value is 1 (RAID 6 writes enabled).
+.IP
+Enable example:
+.IP
+.in +2n
+.EX
+$ \c
+.B echo 1 > /sys/class/scsi_host/host1/enable_r6_writes
+.EE
+.in
+.SS smartpqi-specific disk attribute files in \f[BI]/sys\fP
+In the file specifications below,
+.I c
+stands for the number of the appropriate SCSI controller,
+.I b
+is the bus number,
+.I t
+the target number, and
+.I l
+is the logical unit number (LUN).
+.TP
+.IR /sys/class/scsi_disk/ c : b : t : l /device/raid_level
+The
+.I raid_level
+attribute is read-only.
+This attribute contains the RAID level of the logical volume.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/4:0:0:0/device/raid_level
+RAID 0
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/c : b : t : l/device/sas_address
+The
+.I sas_address
+attribute is read-only.
+This attribute contains the SAS address of the device.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/1:0:3:0/device/sas_address
+0x5001173d028543a2
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/c : b : t : l/device/ssd_smart_path_enabled
+The
+.I ssd_smart_path_enabled
+attribute is read-only.
+This attribute is for ioaccel-enabled volumes.
+(Ioaccel is an alternative driver submission path that allows the
+driver to send I/O requests directly to backend SCSI devices.
+This results in an increase in performance.)
+Contains 1 if ioaccel is enabled for the volume and 0 otherwise.
+.IP
+For example:
+.IP
+.in +2n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/1:0:3:0/device/ssd_smart_path_enabled
+0
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/c : b : t : l/device/lunid
+The
+.I lunid
+attribute is read-only.
+This attribute contains the SCSI LUN ID for the device.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/13:1:0:3/device/lunid
+0x0300004000000000
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/c : b : t : l/device/unique_id
+The
+.I unique_id
+attribute is read-only.
+This attribute contains a 16-byte ID that uniquely identifies the device within the controller.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/13:1:0:3/device/unique_id
+600508B1001C6D4723A8E98D704FDB94
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/c : b : t : l/device/path_info
+The
+.I path_info
+attribute is read-only.
+This attribute contains the c:b:t:l of the device along with the device type and whether the device is Active or Inactive. If the device is an HBA device,
+.I path_info
+will also display the PORT, BOX, and BAY the device is plugged into.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/13:1:0:3/device/path_info
+[13:1:0:3]    Direct-Access     Active
+
+$ \c
+.B cat /sys/class/scsi_disk/12:0:9:0/device/path_info
+[12:0:9:0]    Direct-Access     PORT: C1 BOX: 1 BAY: 14 Inactive
+[12:0:9:0]    Direct-Access     PORT: C0 BOX: 1 BAY: 14 Active
+.EE
+.in
+.TP
+.IR /sys/class/scsi_disk/13:1:0:3/device/raid_bypass_cnt
+The
+.I raid_bypass_cnt
+attribute is read-only.
+This attribute contains the number of I/O requests that have gone through the
+ioaccel path for ioaccel-enabled volumes. See the
+.BI ssd_smart_path_enabled
+disk attribute section for details on ioaccel-enabled volumes.
+.IP
+For example:
+.IP
+.in +4n
+.EX
+$ \c
+.B cat /sys/class/scsi_disk/13:1:0:3/device/raid_bypass_cnt
+0x300
+.EE
+.in
+.SH VERSIONS
+The
+.B smartpqi
+driver was added in Linux 4.9.
+.SH NOTES
+.SS Configuration
+To configure a Microchip Smart Storage controller,
+refer to the User Guide for the controller,
+which can be found by searching for the specific controller at
+.UR https://www.microchip.com/design-centers/storage
+.UE .
+.SH SEE ALSO
+.BR cciss (4),
+.BR hpsa (4),
+.BR sd (4),
+.BR st (4),
+.BR sg (4)
+.PP
+.I Documentation/ABI/testing/sysfs\-bus\-pci\-devices\-cciss
+in the Linux kernel source tree.

@@ -51,7 +51,8 @@
 	defined(RHEL7U5ARM) || \
 	defined(RHEL7U6)    || \
 	defined(RHEL7U7)    || \
-	defined(RHEL7U8)
+	defined(RHEL7U8)    || \
+	defined(RHEL7U9)
 #define RHEL7
 #endif
 
@@ -111,7 +112,7 @@
 #endif
 #endif
 
-#if defined (RHEL8)
+#if defined(RHEL8) || defined(CENTOS7ALTARM)
 #define KFEATURE_HAS_MQ_SUPPORT				0
 #endif
 
@@ -132,6 +133,7 @@
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_2011_03_QUEUECOMMAND		0
 #define KFEATURE_HAS_NO_WRITE_SAME			0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #if defined(RHEL6U3) || defined(RHEL6U4) || defined(RHEL6U5)
 #if defined(RHEL6U3)
 #define KFEATURE_HAS_DMA_ZALLOC_COHERENT		0
@@ -147,12 +149,17 @@
 #elif defined(RHEL7)
 #if defined(RHEL7U0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
+#endif
+#if defined(RHEL7U1)
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #endif
 #elif defined(SLES11)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_NO_WRITE_SAME			0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #if defined(SLES11SP0) || defined(SLES11SP1)
 #define KFEATURE_HAS_2011_03_QUEUECOMMAND		0
 #endif
@@ -166,44 +173,54 @@
 #endif
 #if defined(SLES12SP0)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
+#endif
+#if defined(SLES12SP1)
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #endif
 #elif defined(SLES15)
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #elif defined(OL7U2) || defined(KCLASS3B)
 #define KFEATURE_HAS_DMA_MASK_AND_COHERENT		0
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #endif
 #if defined(KCLASS4A)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
-    defined(KCLASS5B) || defined(SLES15SP2)
+    defined(KCLASS5B) || defined(SLES15SP2) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
     defined(SLES15SP2) || defined(KCLASS5A) || defined(KCLASS5B) || \
-    defined(SLES12SP5)
+    defined(SLES12SP5) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
+#if defined(RHEL8U3)
+#define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
+#endif
+
 #if defined(KCLASS3D)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(SLES15SP2)
-#define dma_zalloc_coherent dma_alloc_coherent
-#define shost_use_blk_mq(x) (1)
+#define dma_zalloc_coherent	dma_alloc_coherent
+#define shost_use_blk_mq(x)	1
 #define KFEATURE_HAS_USE_CLUSTERING			0
 #endif
 
 #if defined(KCLASS5B) || defined(SLES15SP2)
-#define IOCTL_INT unsigned int
+#define IOCTL_INT	unsigned int
 #else
-#define IOCTL_INT int
+#define IOCTL_INT	int
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -243,6 +260,9 @@
 #if !defined(KFEATURE_HAS_BSG_JOB_SMP_HANDLER)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		0
 #endif
+#if !defined(KFEATURE_HAS_HOST_BUSY_FUNCTION)
+#define KFEATURE_HAS_HOST_BUSY_FUNCTION			0
+#endif
 #if !defined(KFEATURE_HAS_SCSI_REQUEST)
 #define KFEATURE_HAS_SCSI_REQUEST			0
 #endif
@@ -264,6 +284,9 @@
 #endif
 #if !defined(KFEATURE_HAS_DMA_MASK_AND_COHERENT)
 #define KFEATURE_HAS_DMA_MASK_AND_COHERENT		1
+#endif
+#if !defined(KFEATURE_HAS_ATOMIC_HOST_BUSY)
+#define KFEATURE_HAS_ATOMIC_HOST_BUSY			1
 #endif
 
 #if !defined(list_next_entry)
@@ -500,20 +523,21 @@ static inline void pqi_bsg_job_done(struct bsg_job *job, int result,
 	container_of(callback_timer, typeof(*var), timer_fieldname)
 
 #if !defined(TIMER_DATA_TYPE)
-#define TIMER_DATA_TYPE unsigned long
-#define TIMER_FUNC_TYPE void (*)(TIMER_DATA_TYPE)
+#define TIMER_DATA_TYPE		unsigned long
+#define TIMER_FUNC_TYPE		void (*)(TIMER_DATA_TYPE)
 #endif
+
 static inline void timer_setup (struct timer_list *timer,
-		void (*func) (struct timer_list *),
-		unsigned long data)
+	void (*func) (struct timer_list *), unsigned long data)
 {
 	init_timer(timer);
 	timer->function = (TIMER_FUNC_TYPE) func;
 	timer->data = (unsigned long) timer;
 }
-#endif  /* KFEATURE_HAS_OLD_TIMER */
+#endif	/* KFEATURE_HAS_OLD_TIMER */
+
 #if !KFEATURE_HAS_KTIME64
-#define time64_to_tm time_to_tm
+#define time64_to_tm	time_to_tm
 #endif
 
 #if !KFEATURE_HAS_KTIME_SECONDS
@@ -540,5 +564,18 @@ static inline int pqi_dma_set_mask_and_coherent(struct device *device, u64 mask)
 	return dma_set_mask_and_coherent(device, mask);
 }
 #endif
+
+static inline bool pqi_scsi_host_busy(struct Scsi_Host *shost)
+{
+#if KFEATURE_HAS_HOST_BUSY_FUNCTION
+	return scsi_host_busy(shost);
+#else
+#if KFEATURE_HAS_ATOMIC_HOST_BUSY
+	return atomic_read(&shost->host_busy) > 0;
+#else
+	return shost->host_busy > 0;
+#endif
+#endif
+}
 
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */

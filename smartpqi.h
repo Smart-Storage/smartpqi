@@ -136,8 +136,11 @@ struct pqi_iu_header {
 				/* of this header */
 	__le16	response_queue_id;	/* specifies the OQ where the */
 					/* response IU is to be delivered */
-	u8	work_area[2];	/* reserved for driver use */
+	u16	driver_flags;	/* reserved for driver use */
 };
+
+/* manifest constants for pqi_iu_header.driver_flags */
+#define PQI_DRIVER_NONBLOCKABLE_REQUEST		0x1
 
 /*
  * According to the PQI spec, the IU header is only the first 4 bytes of our
@@ -360,7 +363,7 @@ struct pqi_event_config {
 
 #define PQI_EVENT_OFA_MEMORY_ALLOCATION	0x0
 #define PQI_EVENT_OFA_QUIESCE		0x1
-#define PQI_EVENT_OFA_CANCELLED		0x2
+#define PQI_EVENT_OFA_CANCELED		0x2
 
 struct pqi_event_response {
 	struct pqi_iu_header header;
@@ -449,10 +452,6 @@ struct pqi_vendor_general_response {
 #define PQI_OFA_SIGNATURE		"OFA_QRM"
 #define PQI_OFA_MAX_SG_DESCRIPTORS	64
 
-#define PQI_OFA_MEMORY_DESCRIPTOR_LENGTH \
-	(offsetof(struct pqi_ofa_memory, sg_descriptor) + \
-	(PQI_OFA_MAX_SG_DESCRIPTORS * sizeof(struct pqi_sg_descriptor)))
-
 struct pqi_ofa_memory {
 	__le64	signature;	/* "OFA_QRM" */
 	__le16	version;	/* version of this struct (1 = 1st version) */
@@ -460,7 +459,7 @@ struct pqi_ofa_memory {
 	__le32	bytes_allocated;	/* total allocated memory in bytes */
 	__le16	num_memory_descriptors;
 	u8	reserved1[2];
-	struct pqi_sg_descriptor sg_descriptor[1];
+	struct pqi_sg_descriptor sg_descriptor[PQI_OFA_MAX_SG_DESCRIPTORS];
 };
 
 struct pqi_aio_error_info {
@@ -772,11 +771,12 @@ struct pqi_config_table_firmware_features {
 /*	u8	features_enabled[]; */
 };
 
-#define PQI_FIRMWARE_FEATURE_OFA			0
-#define PQI_FIRMWARE_FEATURE_SMP			1
-#define PQI_FIRMWARE_FEATURE_SOFT_RESET_HANDSHAKE	11
-#define PQI_FIRMWARE_FEATURE_RAID_IU_TIMEOUT		13
-#define PQI_FIRMWARE_FEATURE_TMF_IU_TIMEOUT		14
+#define PQI_FIRMWARE_FEATURE_OFA				0
+#define PQI_FIRMWARE_FEATURE_SMP				1
+#define PQI_FIRMWARE_FEATURE_SOFT_RESET_HANDSHAKE		11
+#define PQI_FIRMWARE_FEATURE_RAID_IU_TIMEOUT			13
+#define PQI_FIRMWARE_FEATURE_TMF_IU_TIMEOUT			14
+#define PQI_FIRMWARE_FEATURE_UNIQUE_WWID_IN_REPORT_PHYS_LUN	16
 
 struct pqi_config_table_debug {
 	struct pqi_config_table_section_header header;
@@ -945,8 +945,8 @@ struct pqi_scsi_dev {
 	u8	new_device : 1;
 	u8	keep_device : 1;
 	u8	volume_offline : 1;
+	u8	rescan : 1;
 	bool	aio_enabled;		/* only valid for physical disks */
-	bool	in_reset;
 	bool	in_remove;
 	bool	device_offline;
 	u8	vendor[8];		/* bytes 8-15 of inquiry data */
@@ -965,6 +965,7 @@ struct pqi_scsi_dev {
 	u8	phy_connected_dev_type;
 	u8	box[8];
 	u16	phys_connector[8];
+	u8	phy_id;
 	bool	raid_bypass_configured;	/* RAID bypass configured */
 	bool	raid_bypass_enabled;	/* RAID bypass enabled */
 	int	offload_to_mirror;	/* Send next RAID bypass request */
@@ -980,6 +981,8 @@ struct pqi_scsi_dev {
 	struct list_head delete_list_entry;
 
 	atomic_t scsi_cmds_outstanding;
+	atomic_t raid_bypass_cnt;
+	u8	page_83_identifier[16];
 };
 
 /* VPD inquiry pages */
@@ -1085,10 +1088,8 @@ struct pqi_io_request {
 struct pqi_event {
 	bool	pending;
 	u8	event_type;
-	__le16	event_id;
-	__le32	additional_event_id;
-	__le32	ofa_bytes_requested;
-	__le16	ofa_cancel_reason;
+	u16	event_id;
+	u32	additional_event_id;
 };
 
 #define PQI_RESERVED_IO_SLOTS_LUN_RESET			1
@@ -1154,12 +1155,9 @@ struct pqi_ctrl_info {
 
 	struct mutex	scan_mutex;
 	struct mutex	lun_reset_mutex;
-	struct mutex	ofa_mutex;
 	bool		controller_online;
 	bool		block_requests;
-	bool		block_device_reset;
-	bool		in_ofa;
-	bool		in_shutdown;
+	bool		scan_blocked;
 	u8		inbound_spanning_supported : 1;
 	u8		outbound_spanning_supported : 1;
 	u8		pqi_mode_enabled : 1;
@@ -1167,6 +1165,7 @@ struct pqi_ctrl_info {
 	u8		soft_reset_handshake_supported : 1;
 	u8		raid_iu_timeout_supported : 1;
 	u8		tmf_iu_timeout_supported : 1;
+	u8		unique_wwid_in_report_phys_lun_supported : 1;
 
 	struct list_head scsi_device_list;
 	spinlock_t	scsi_device_list_lock;
@@ -1196,14 +1195,14 @@ struct pqi_ctrl_info {
 	atomic_t	num_blocked_threads;
 	wait_queue_head_t block_requests_wait;
 
-	struct list_head raid_bypass_retry_list;
-	spinlock_t	raid_bypass_retry_list_lock;
-	struct work_struct raid_bypass_retry_work;
-
+	struct mutex	ofa_mutex;
 	struct pqi_ofa_memory *pqi_ofa_mem_virt_addr;
 	dma_addr_t	pqi_ofa_mem_dma_handle;
 	void		**pqi_ofa_chunk_virt_addr;
-	atomic_t	sync_cmds_outstanding;
+	struct work_struct ofa_memory_alloc_work;
+	struct work_struct ofa_quiesce_work;
+	u32		ofa_bytes_requested;
+	u16		ofa_cancel_reason;
 };
 
 enum pqi_ctrl_mode {
@@ -1275,6 +1274,7 @@ struct bmic_sense_subsystem_info {
 #define SA_DEVICE_TYPE_SATA		0x1
 #define SA_DEVICE_TYPE_SAS		0x2
 #define SA_DEVICE_TYPE_EXPANDER_SMP	0x5
+#define SA_DEVICE_TYPE_SES		0x6
 #define SA_DEVICE_TYPE_CONTROLLER	0x7
 #define SA_DEVICE_TYPE_NVME		0x9
 

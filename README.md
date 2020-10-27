@@ -1,7 +1,29 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
-Version 1.2.14-015 (June 2020)
+Version 1.2.16-040 (October 2020)
+  - Kernel compatibility updates.
+  - Device ID updates
+  - Added smartpqi man page.
+  - Return busy indication for pass-through IOCTLs now only during "quiesce"
+    stage of OFA.
+  - Corrected an issue where the enclosure identifier in sysfs could show
+    up empty.
+  - PHY ID support added for the physical drives on multipath configurations.
+  - Export valid initiator_port_protocols and target_port_protocols
+    based on targets to sysfs.
+  - Corrected timing of release of QRM memory during OFA
+  - Driver is now aware of devices being deleted via sysfs.
+  - Driver now handles invalid responses from the controller by taking the
+    controller offline.
+  - Improved driver synchronization code related to LUN reset, system shutdown,
+    system suspend, system hibernate, OFA and controller offline.
+  - Driver now identifies volume size expansion and notifies the OS to rescan
+    logical volume.
+  - Changed method of identifing physical devices.
+
+
+Version 1.2.14-[015-017] (June 2020)
   - Kernel compatibility updates.
 
 Version 1.2.14-010 (April 2020)

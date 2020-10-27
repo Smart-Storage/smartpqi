@@ -54,6 +54,10 @@ OSVENDOR := $(shell \
          UPDATE=`grep "release 8" /etc/redhat-release | \
             sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
          echo "RHEL8U$${UPDATE}"; \
+      elif [ -n "`grep 'AltArch' /etc/redhat-release | grep 'release 7'`" -a \
+           $(KVER_SHORT) = "4.18" ]; \
+      then \
+         echo "CENTOS7ALTARM"; \
       elif [ -n "`egrep 'Maipo|release 7' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "3.10" ]; \
       then \
