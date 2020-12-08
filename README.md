@@ -1,6 +1,9 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 1.2.16-045 (December 2020)
+  - Kernel compatibility updates for later 5.X kernels.
+
 Version 1.2.16-040 (October 2020)
   - Kernel compatibility updates.
   - Device ID updates

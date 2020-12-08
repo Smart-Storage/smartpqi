@@ -41,11 +41,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"1.2.16-040"
+#define DRIVER_VERSION		"1.2.16-045"
 #define DRIVER_MAJOR		1
 #define DRIVER_MINOR		2
 #define DRIVER_RELEASE		16
-#define DRIVER_REVISION		32
+#define DRIVER_REVISION		37
 
 #define DRIVER_NAME		"Microsemi PQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -60,10 +60,10 @@
 MODULE_AUTHOR("Microsemi");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-3bd78a0/s-e18e9bd)" " (d147/s325)");
+	DRIVER_VERSION " (d-f13cb2c/s-cf9eece)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microsemi Smart Family Controller version "
-	DRIVER_VERSION " (d-3bd78a0/s-e18e9bd)");
+	DRIVER_VERSION " (d-f13cb2c/s-cf9eece)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microsemi Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);

@@ -39,8 +39,14 @@ KERNEL_CLASS := $(shell \
       if [ $(KMAJOR) -lt 1 ]; \
       then \
 	echo "KCLASS$(KVERSION)A"; \
-      else \
+      elif [ $(KMAJOR) -lt 5 ]; \
+      then \
         echo "KCLASS$(KVERSION)B"; \
+      elif [ $(KMAJOR) -eq 5 ]; \
+      then \
+        echo "KCLASS$(KVERSION)C"; \
+      else \
+        echo "KCLASS$(KVERSION)D"; \
       fi; \
    fi; \
 )
@@ -120,7 +126,7 @@ KDIR  := /lib/modules/$(KVER)/build
 PWD   := $(shell pwd)
 
 BLK := $(shell \
-   GF=`find -L /lib/modules/$(KVER) -name blkdev.h | tail -1`; \
+   GF=`find -L /lib/modules/$(KVER) -name blkdev.h -size +0 | tail -1`; \
    grep blk_rq_is_passthrough $${GF}; \
 )
 

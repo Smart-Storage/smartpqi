@@ -194,13 +194,15 @@
 #endif
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
-    defined(KCLASS5B) || defined(SLES15SP2) || defined (CENTOS7ALTARM)
+    defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
+    defined(SLES15SP2) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
     defined(SLES15SP2) || defined(KCLASS5A) || defined(KCLASS5B) || \
+    defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(SLES12SP5) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
@@ -211,16 +213,23 @@
 #if defined(KCLASS3D)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
-#if defined(KCLASS5A) || defined(KCLASS5B) || defined(SLES15SP2)
+#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
+    defined(KCLASS4D) || defined(SLES15SP2)
 #define dma_zalloc_coherent	dma_alloc_coherent
 #define shost_use_blk_mq(x)	1
 #define KFEATURE_HAS_USE_CLUSTERING			0
 #endif
 
-#if defined(KCLASS5B) || defined(SLES15SP2)
+#if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2)
 #define IOCTL_INT	unsigned int
 #else
 #define IOCTL_INT	int
+#endif
+
+#if defined(KCLASS5C) || defined(KCLASS5D)
+#define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
+#define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
+#define ioremap_nocache ioremap
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
