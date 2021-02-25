@@ -1,6 +1,7 @@
 /*
- *    driver for PMC-Sierra PQI-based storage controllers
- *    Copyright (c) 2016-2019 Microsemi Corporation
+ *    driver for Microchip PQI-based storage controllers
+ *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
  *    This program is free software; you can redistribute it and/or modify
@@ -12,7 +13,7 @@
  *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
  *    NON INFRINGEMENT.  See the GNU General Public License for more details.
  *
- *    Questions/Comments/Bugfixes to esc.storagedev@microsemi.com
+ *    Questions/Comments/Bugfixes to storagedev@microchip.com
  *
  */
 
@@ -195,14 +196,14 @@
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
     defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(SLES15SP2) || defined (CENTOS7ALTARM)
+    defined(SLES15SP2) || defined(SLES15SP3) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
-    defined(SLES15SP2) || defined(KCLASS5A) || defined(KCLASS5B) || \
-    defined(KCLASS5C) || defined(KCLASS5D) || \
+    defined(SLES15SP2) || defined(SLES15SP3) || defined(KCLASS5A) || \
+    defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(SLES12SP5) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
@@ -214,13 +215,14 @@
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(KCLASS4D) || defined(SLES15SP2)
+    defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3)
 #define dma_zalloc_coherent	dma_alloc_coherent
 #define shost_use_blk_mq(x)	1
 #define KFEATURE_HAS_USE_CLUSTERING			0
 #endif
 
-#if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2)
+#if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
+    defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3)
 #define IOCTL_INT	unsigned int
 #else
 #define IOCTL_INT	int
@@ -354,6 +356,10 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 	.subvendor = (subvend), .subdevice = (subdev)
 #endif
 
+#if !defined(PCI_VENDOR_ID_HPE)
+#define PCI_VENDOR_ID_HPE		0x1590
+#endif
+
 #if !defined(PCI_VENDOR_ID_ADVANTECH)
 #define PCI_VENDOR_ID_ADVANTECH		0x13fe
 #endif
@@ -384,6 +390,11 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_INSPUR)
 #define PCI_VENDOR_ID_INSPUR		0x1bd4
+#endif
+
+#if !defined(offsetofend)
+#define offsetofend(TYPE, MEMBER) \
+	(offsetof(TYPE, MEMBER)	+ sizeof(((TYPE *)0)->MEMBER))
 #endif
 
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *template);
@@ -503,7 +514,7 @@ static inline bool blk_rq_is_passthrough(struct request *rq)
 	return rq->cmd_type != REQ_TYPE_FS;
 }
 
-#endif	/* !KFEATURE_HAS_BLK_RQ_IS_PASSTHROUGH */
+#endif	/* KFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH */
 
 #if !KFEATURE_HAS_BSG_JOB_SMP_HANDLER
 
@@ -525,7 +536,7 @@ static inline void pqi_bsg_job_done(struct bsg_job *job, int result,
 	bsg_job_done(job, result, reply_payload_rcv_len);
 }
 
-#endif	/* KFEATURE_HAS_BSG_JOB_SMP_HANDLER */
+#endif	/* !KFEATURE_HAS_BSG_JOB_SMP_HANDLER */
 
 #if KFEATURE_HAS_OLD_TIMER
 #define from_timer(var, callback_timer, timer_fieldname) \
@@ -563,16 +574,20 @@ static inline unsigned long ktime_get_real_seconds(void)
 #endif
 
 #if !KFEATURE_HAS_DMA_MASK_AND_COHERENT
+
 static inline int pqi_dma_set_mask_and_coherent(struct device *device, u64 mask)
 {
 	return dma_set_mask(device, mask);
 }
+
 #else
+
 static inline int pqi_dma_set_mask_and_coherent(struct device *device, u64 mask)
 {
 	return dma_set_mask_and_coherent(device, mask);
 }
-#endif
+
+#endif	/* !KFEATURE_HAS_DMA_MASK_AND_COHERENT */
 
 static inline bool pqi_scsi_host_busy(struct Scsi_Host *shost)
 {

@@ -1,6 +1,7 @@
 /*
- *    driver for Microsemi PQI-based storage controllers
- *    Copyright (c) 2016-2019 Microsemi Corporation
+ *    driver for Microchip PQI-based storage controllers
+ *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
  *    This program is free software; you can redistribute it and/or modify
@@ -12,7 +13,7 @@
  *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
  *    NON INFRINGEMENT.  See the GNU General Public License for more details.
  *
- *    Questions/Comments/Bugfixes to esc.storagedev@microsemi.com
+ *    Questions/Comments/Bugfixes to storagedev@microchip.com
  *
  */
 

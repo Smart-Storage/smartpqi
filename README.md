@@ -1,6 +1,15 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.8-040 (February 2021)
+  - Support for new Tri-mode controllers.
+  - Fixed a firmware ASSERT issue when scsi-mid-layer sends requests that
+    exceeded the exposed host queue depth.
+  - Fixed an issue where I/O requests to the disk were blocked before
+    Synchronize Cache requests are issued.
+  - Fixed an issue where IOBypass read I/O requests were failing.
+  - Updated kernel compatibility.
+
 Version 1.2.16-045 (December 2020)
   - Kernel compatibility updates for later 5.X kernels.
 
