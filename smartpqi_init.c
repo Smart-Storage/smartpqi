@@ -42,11 +42,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.8-040"
+#define DRIVER_VERSION		"2.1.10-020"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		8
-#define DRIVER_REVISION		32
+#define DRIVER_RELEASE		10
+#define DRIVER_REVISION		16
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -61,10 +61,10 @@
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-39ee840/s-eca423e)" " (d147/s325)");
+	DRIVER_VERSION " (d-af3f679/s-819dd6f)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-39ee840/s-eca423e)");
+	DRIVER_VERSION " (d-af3f679/s-819dd6f)");
 #endif
 MODULE_SUPPORTED_DEVICE("Microchip Smart Family Controllers");
 MODULE_VERSION(DRIVER_VERSION);
@@ -3753,19 +3753,19 @@ out:
 
 static int pqi_request_irqs(struct pqi_ctrl_info *ctrl_info)
 {
+	struct pci_dev *pci_dev = ctrl_info->pci_dev;
 	int i;
 	int rc;
 
-	ctrl_info->event_irq = ctrl_info->msix_vectors[0];
+	ctrl_info->event_irq = pqi_pci_irq_vector(pci_dev, 0);
 
 	for (i = 0; i < ctrl_info->num_msix_vectors_enabled; i++) {
-		rc = request_irq(ctrl_info->msix_vectors[i],
-			pqi_irq_handler, 0,
-			DRIVER_NAME_SHORT, ctrl_info->intr_data[i]);
+		rc = request_irq(pqi_pci_irq_vector(pci_dev, i), pqi_irq_handler, 0,
+		 	DRIVER_NAME_SHORT, pqi_get_irq_cookie(ctrl_info, i));
 		if (rc) {
-			dev_err(&ctrl_info->pci_dev->dev,
+			dev_err(&pci_dev->dev,
 				"irq %u init failed with error %d\n",
-				ctrl_info->msix_vectors[i], rc);
+				pqi_pci_irq_vector(pci_dev, i), rc);
 			return rc;
 		}
 		ctrl_info->num_msix_vectors_initialized++;
@@ -3779,26 +3779,19 @@ static void pqi_free_irqs(struct pqi_ctrl_info *ctrl_info)
 	int i;
 
 	for (i = 0; i < ctrl_info->num_msix_vectors_initialized; i++)
-		free_irq(ctrl_info->msix_vectors[i],
-			ctrl_info->intr_data[i]);
+		free_irq(pqi_pci_irq_vector(ctrl_info->pci_dev, i),
+			pqi_get_irq_cookie(ctrl_info, i));
 
 	ctrl_info->num_msix_vectors_initialized = 0;
 }
 
 static int pqi_enable_msix_interrupts(struct pqi_ctrl_info *ctrl_info)
 {
-	unsigned int i;
-	int max_vectors;
 	int num_vectors_enabled;
-	struct msix_entry msix_entries[PQI_MAX_MSIX_VECTORS];
 
-	max_vectors = ctrl_info->num_queue_groups;
-
-	for (i = 0; i < max_vectors; i++)
-		msix_entries[i].entry = i;
-
-	num_vectors_enabled = pci_enable_msix_range(ctrl_info->pci_dev,
-		msix_entries, PQI_MIN_MSIX_VECTORS, max_vectors);
+	num_vectors_enabled = pqi_pci_alloc_irq_vectors(ctrl_info->pci_dev,
+			PQI_MIN_MSIX_VECTORS, ctrl_info->num_queue_groups,
+			PCI_IRQ_MSIX | PCI_IRQ_AFFINITY);
 
 	if (num_vectors_enabled < 0) {
 		dev_err(&ctrl_info->pci_dev->dev,
@@ -3808,11 +3801,6 @@ static int pqi_enable_msix_interrupts(struct pqi_ctrl_info *ctrl_info)
 	}
 
 	ctrl_info->num_msix_vectors_enabled = num_vectors_enabled;
-	for (i = 0; i < num_vectors_enabled; i++) {
-		ctrl_info->msix_vectors[i] = msix_entries[i].vector;
-		ctrl_info->intr_data[i] = &ctrl_info->queue_groups[i];
-	}
-
 	ctrl_info->irq_mode = IRQ_MODE_MSIX;
 
 	return 0;
@@ -3821,35 +3809,9 @@ static int pqi_enable_msix_interrupts(struct pqi_ctrl_info *ctrl_info)
 static void pqi_disable_msix_interrupts(struct pqi_ctrl_info *ctrl_info)
 {
 	if (ctrl_info->num_msix_vectors_enabled) {
-		pci_disable_msix(ctrl_info->pci_dev);
+		pqi_pci_free_irq_vectors(ctrl_info->pci_dev);
 		ctrl_info->num_msix_vectors_enabled = 0;
 	}
-}
-
-static void pqi_irq_set_affinity_hint(struct pqi_ctrl_info *ctrl_info)
-{
-	int i;
-	int rc;
-	int cpu;
-
-	cpu = cpumask_first(cpu_online_mask);
-	for (i = 0; i < ctrl_info->num_msix_vectors_initialized; i++) {
-		rc = irq_set_affinity_hint(ctrl_info->msix_vectors[i],
-			get_cpu_mask(cpu));
-		if (rc)
-			dev_err(&ctrl_info->pci_dev->dev,
-				"error %d setting affinity hint for irq vector %u\n",
-				rc, ctrl_info->msix_vectors[i]);
-		cpu = cpumask_next(cpu, cpu_online_mask);
-	}
-}
-
-static void pqi_irq_unset_affinity_hint(struct pqi_ctrl_info *ctrl_info)
-{
-	int i;
-
-	for (i = 0; i < ctrl_info->num_msix_vectors_initialized; i++)
-		irq_set_affinity_hint(ctrl_info->msix_vectors[i], NULL);
 }
 
 static int pqi_alloc_operational_queues(struct pqi_ctrl_info *ctrl_info)
@@ -5932,6 +5894,8 @@ static void pqi_fail_io_queued_for_device(struct pqi_ctrl_info *ctrl_info,
 
 				list_del(&io_request->request_list_entry);
 				set_host_byte(scmd, DID_RESET);
+				pqi_free_io_request(io_request);
+				scsi_dma_unmap(scmd);
 				pqi_scsi_done(scmd);
 			}
 
@@ -6120,8 +6084,10 @@ static int pqi_eh_device_reset_handler(struct scsi_cmnd *scmd)
 	mutex_lock(&ctrl_info->lun_reset_mutex);
 
 	dev_err(&ctrl_info->pci_dev->dev,
-		"resetting scsi %d:%d:%d:%d due to cmd 0x%02x\n", shost->host_no,
-		device->bus, device->target, device->lun, scmd->cmnd[0]);
+		"resetting scsi %d:%d:%d:%d due to cmd 0x%02x\n",
+		shost->host_no,
+		device->bus, device->target, device->lun,
+		scmd->cmd_len > 0 ? scmd->cmnd[0] : 0xff);
 
 	pqi_check_ctrl_health(ctrl_info);
 	if (pqi_ctrl_offline(ctrl_info))
@@ -7023,7 +6989,7 @@ static int pqi_register_scsi(struct pqi_ctrl_info *ctrl_info)
 	shost->cmd_per_lun = shost->can_queue;
 	shost->sg_tablesize = ctrl_info->sg_tablesize;
 	shost->transportt = pqi_sas_transport_template;
-	shost->irq = ctrl_info->msix_vectors[0];
+	shost->irq = pqi_pci_irq_vector(ctrl_info->pci_dev, 0);
 	shost->unique_id = shost->irq;
 	shost->hostdata[0] = (unsigned long)ctrl_info;
 	pqi_compat_init_scsi_host(shost, ctrl_info);
@@ -7825,13 +7791,11 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 
 	pqi_init_operational_queues(ctrl_info);
 
-	rc = pqi_request_irqs(ctrl_info);
+	rc = pqi_create_queues(ctrl_info);
 	if (rc)
 		return rc;
 
-	pqi_irq_set_affinity_hint(ctrl_info);
-
-	rc = pqi_create_queues(ctrl_info);
+	rc = pqi_request_irqs(ctrl_info);
 	if (rc)
 		return rc;
 
@@ -8200,7 +8164,6 @@ static inline void pqi_free_ctrl_info(struct pqi_ctrl_info *ctrl_info)
 
 static void pqi_free_interrupts(struct pqi_ctrl_info *ctrl_info)
 {
-	pqi_irq_unset_affinity_hint(ctrl_info);
 	pqi_free_irqs(ctrl_info);
 	pqi_disable_msix_interrupts(ctrl_info);
 }
@@ -8746,8 +8709,9 @@ static int pqi_resume(struct pci_dev *pci_dev)
 		ctrl_info->max_hw_queue_index = 0;
 		pqi_free_interrupts(ctrl_info);
 		pqi_change_irq_mode(ctrl_info, IRQ_MODE_INTX);
-		rc = request_irq(pci_dev->irq, pqi_irq_handler, IRQF_SHARED,
-			DRIVER_NAME_SHORT, ctrl_info->intr_data[0]);
+		rc = request_irq(pqi_pci_irq_vector(pci_dev, 0), pqi_irq_handler,
+			IRQF_SHARED, DRIVER_NAME_SHORT,
+			pqi_get_irq_cookie(ctrl_info, 0));
 		if (rc) {
 			dev_err(&ctrl_info->pci_dev->dev,
 				"irq %u init failed with error %d\n",
@@ -8827,6 +8791,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_H3C, 0x1108)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_H3C, 0x1109)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
@@ -9130,6 +9098,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ADAPTEC2, 0x1473)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_ADAPTEC2, 0x1480)
 	},
 	{
@@ -9270,6 +9242,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HPE, 0x036f)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_FIBERHOME, 0x0800)
 	},
 	{
@@ -9287,6 +9263,34 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_GIGABYTE, 0x1000)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_NTCOM, 0x3161)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x5445)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x5446)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x5447)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x0b27)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x0b29)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_ZTE, 0x0b45)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,

@@ -23,6 +23,9 @@
 #include <scsi/scsi_device.h>
 #include "smartpqi.h"
 #include "smartpqi_kernel_compat.h"
+#if KFEATURE_ENABLE_SCSI_MAP_QUEUES
+#include <linux/blk-mq-pci.h>
+#endif
 
 #if !KFEATURE_HAS_2011_03_QUEUECOMMAND
 
@@ -113,6 +116,24 @@ static int pqi_change_queue_type(struct scsi_device *sdev, int tag_type)
 
 #endif	/* !KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH */
 
+#if KFEATURE_ENABLE_SCSI_MAP_QUEUES
+static int pqi_map_queues(struct Scsi_Host *shost)
+{
+	struct pqi_ctrl_info *ctrl_info = shost_to_hba(shost);
+
+#if KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1
+	return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev);
+#elif KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2
+	return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev, 0);
+#elif KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3
+	return blk_mq_pci_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
+					ctrl_info->pci_dev, 0);
+#else
+	#error "A version for KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES has not been defined."
+#endif
+}
+#endif /* KFEATURE_ENABLE_SCSI_MAP_QUEUES */
+
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *hostt)
 {
 #if !KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH
@@ -124,6 +145,9 @@ void pqi_compat_init_scsi_host_template(struct scsi_host_template *hostt)
 #endif
 #if KFEATURE_HAS_USE_CLUSTERING
 	hostt->use_clustering = ENABLE_CLUSTERING;
+#endif
+#if KFEATURE_ENABLE_SCSI_MAP_QUEUES
+	hostt->map_queues = pqi_map_queues;
 #endif
 }
 
@@ -309,3 +333,53 @@ int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
 }
 
 #endif	/* !KFEATURE_HAS_BSG_JOB_SMP_HANDLER */
+
+int pqi_pci_irq_vector(struct pci_dev *dev, unsigned int nr)
+{
+#if KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
+	return pci_irq_vector(dev, nr);
+#else
+	struct pqi_ctrl_info *ctrl_info;
+
+	ctrl_info = pci_get_drvdata(dev);
+
+	return ctrl_info->msix_vectors[nr];
+#endif
+}
+
+void pqi_pci_free_irq_vectors(struct pci_dev *dev)
+{
+#if KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
+	pci_free_irq_vectors(dev);
+#else
+	pci_disable_msix(dev);
+#endif
+}
+
+int pqi_pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
+                              unsigned int max_vecs, unsigned int flags)
+{
+#if KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
+	return pci_alloc_irq_vectors(dev, min_vecs, max_vecs, flags);
+#else
+	unsigned int i;
+	int num_vectors_enabled;
+	struct pqi_ctrl_info *ctrl_info;
+	struct msix_entry msix_entries[PQI_MAX_MSIX_VECTORS];
+
+	ctrl_info = pci_get_drvdata(dev);
+
+	for (i = 0; i < max_vecs; i++)
+		msix_entries[i].entry = i;
+
+	num_vectors_enabled = pci_enable_msix_range(dev, msix_entries, min_vecs,
+		max_vecs);
+
+	for (i = 0; i < num_vectors_enabled; i++) {
+		ctrl_info->msix_vectors[i] = msix_entries[i].vector;
+		ctrl_info->intr_data[i] = &ctrl_info->queue_groups[i];
+	}
+
+	return num_vectors_enabled;
+#endif
+}

@@ -1,6 +1,17 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.10-020 (June 2021)
+  - Enabled multi-queue support for Red Hat Enterprise Linux 8 and 
+    SUSE Linux Enterprise Server 15.
+  - Corrected an issue where the interrupt service routine could access
+    uninitialized data.
+  - Corrected an sg_reset issue that could oops the kernel.
+  - Corrected a request leakage issue to avoid a potential server crash on reboot.
+  - Changed method of detecting RAID bypass requests that should be retried.
+  - Device ID updates.
+  - Updated kernel compatibility.
+
 Version 2.1.8-040 (February 2021)
   - Support for new Tri-mode controllers.
   - Fixed a firmware ASSERT issue when scsi-mid-layer sends requests that

@@ -113,7 +113,7 @@
 #endif
 #endif
 
-#if defined(RHEL8) || defined(CENTOS7ALTARM)
+#if defined(CENTOS7ALTARM)
 #define KFEATURE_HAS_MQ_SUPPORT				0
 #endif
 
@@ -157,6 +157,12 @@
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #endif
+#elif defined(RHEL8)
+#define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
+#define KFEATURE_HAS_MQ_SUPPORT 			1
+#define shost_use_blk_mq(x) 				1
+#define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3		1
 #elif defined(SLES11)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_NO_WRITE_SAME			0
@@ -180,8 +186,18 @@
 #define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
 #endif
 #elif defined(SLES15)
-#define KFEATURE_HAS_SCSI_REQUEST			1
-#define KFEATURE_HAS_KTIME_SECONDS			1
+#define KFEATURE_HAS_SCSI_REQUEST 			1
+#define KFEATURE_HAS_KTIME_SECONDS 			1
+#define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
+#define KFEATURE_HAS_MQ_SUPPORT 			1
+#define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
+#if defined(SLES15SP0)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1 		1
+#elif defined(SLES15SP1)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2 		1
+#else
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3 		1
+#endif
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
@@ -207,7 +223,7 @@
     defined(SLES12SP5) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
-#if defined(RHEL8U3)
+#if defined(RHEL8U3) || defined(RHEL8U4)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #endif
 
@@ -298,6 +314,21 @@
 #endif
 #if !defined(KFEATURE_HAS_ATOMIC_HOST_BUSY)
 #define KFEATURE_HAS_ATOMIC_HOST_BUSY			1
+#endif
+#if !defined(KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS)
+#define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		0
+#endif
+#if !defined(KFEATURE_ENABLE_SCSI_MAP_QUEUES)
+#define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		0
+#endif
+#if !defined(KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1 		0
+#endif
+#if !defined(KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2 		0
+#endif
+#if !defined(KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3 		0
 #endif
 
 #if !defined(list_next_entry)
@@ -390,6 +421,14 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_INSPUR)
 #define PCI_VENDOR_ID_INSPUR		0x1bd4
+#endif
+
+#if !defined(PCI_VENDOR_ID_NTCOM)
+#define PCI_VENDOR_ID_NTCOM		0x1dfc
+#endif
+
+#if !defined(PCI_VENDOR_ID_ZTE)
+#define PCI_VENDOR_ID_ZTE		0x1cf2
 #endif
 
 #if !defined(offsetofend)
@@ -599,6 +638,29 @@ static inline bool pqi_scsi_host_busy(struct Scsi_Host *shost)
 #else
 	return shost->host_busy > 0;
 #endif
+#endif
+}
+
+#if !KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
+#if !defined(PCI_IRQ_MSIX)
+#define PCI_IRQ_MSIX		(1 << 2) /* Allow MSI-X interrupts */
+#endif
+#if !defined(PCI_IRQ_AFFINITY)
+#define PCI_IRQ_AFFINITY	(1 << 3) /* Auto-assign affinity */
+#endif
+#endif
+
+int pqi_pci_irq_vector(struct pci_dev *dev, unsigned int nr);
+int pqi_pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
+                              unsigned int max_vecs, unsigned int flags);
+void pqi_pci_free_irq_vectors(struct pci_dev *dev);
+
+static inline void *pqi_get_irq_cookie(struct pqi_ctrl_info *ctrl_info, unsigned int nr)
+{
+#if KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
+	return &ctrl_info->queue_groups[nr];
+#else
+	return ctrl_info->intr_data[nr];
 #endif
 }
 
