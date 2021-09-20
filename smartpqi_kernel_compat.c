@@ -342,8 +342,10 @@ int pqi_pci_irq_vector(struct pci_dev *dev, unsigned int nr)
 	struct pqi_ctrl_info *ctrl_info;
 
 	ctrl_info = pci_get_drvdata(dev);
-
-	return ctrl_info->msix_vectors[nr];
+	if (ctrl_info->irq_mode == IRQ_MODE_INTX)
+		return dev->irq;
+	else
+		return ctrl_info->msix_vectors[nr];
 #endif
 }
 

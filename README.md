@@ -1,6 +1,21 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.12-055 (August 2021)
+  - Fixed an issue where duplicate device nodes for Ultrium tape drive and
+    medium changer are being created.
+  - Fixed an issue where in some situations when the driver takes the
+    controller offline, a kernel crash can occur.
+  - Fixed an issue where OS boot may fail during logical volume rebuild.
+  - Fixed an issue where using sysfs to temporarily remove a device does not
+    work.
+  - Fixed an issue where during system hibernation, driver frees all the irqs, 
+    disables MSIx interrupts and requests legacy INTx interrupt. When driver 
+    invokes request_irq(), OS returns?EINVAL.
+  - Fixed an issue with request leakage, performance drop, and system crash.
+    The issue happens in a max configuration where heavy I/O load is exercised
+    with occasional LUN resets on the exposed devices.
+
 Version 2.1.12-025 (July 2021)
   - Due to a change in the SCSI mid-layer, some Linux distributions may take a 
     long time to come up if the system is rebooted while a hard disk(s) is 
