@@ -94,6 +94,13 @@ OSVENDOR := $(shell \
       else \
          echo "KERNEL"; \
       fi; \
+   elif [ -f /etc/openEuler-release ]; \
+   then \
+      if [ -n "`grep 'release 20.03' /etc/openEuler-release`" -a \
+           $(KVER_SHORT) = "4.19" ]; \
+      then \
+         echo "KCLASS5B"; \
+      fi; \
    elif [ -f /etc/os-release ]; \
    then \
       if [ -n "`grep 'Enterprise Server 15' /etc/os-release`" ]; \
@@ -122,11 +129,14 @@ COMPAT_SWITCH := $(shell \
       echo "EXTRA_CFLAGS+=-D$(OSVENDOR)"; \
    fi; \
 )
-KDIR  := /lib/modules/$(KVER)/build
+ifeq (${KDIR},)
+   KDIR := /lib/modules/$(KVER)
+endif
+KBDIR := ${KDIR}/build
 PWD   := $(shell pwd)
 
 BLK := $(shell \
-   GF=`find -L /lib/modules/$(KVER) -name blkdev.h -size +0 | tail -1`; \
+   GF=`find -L $(KDIR) -name blkdev.h -size +0 | tail -1`; \
    grep blk_rq_is_passthrough $${GF}; \
 )
 
@@ -138,11 +148,11 @@ MORE_CFLAGS := $(shell \
 )
 
 default:
-	$(MAKE) -C $(KDIR) M=$(PWD) $(COMPAT_SWITCH) $(MORE_CFLAGS) modules
+	$(MAKE) -C $(KBDIR) M=$(PWD) $(COMPAT_SWITCH) $(MORE_CFLAGS) modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KBDIR) M=$(PWD) clean
 
 install:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
+	$(MAKE) -C $(KBDIR) M=$(PWD) modules_install
 

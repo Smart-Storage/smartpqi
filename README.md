@@ -1,6 +1,13 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.12-025 (July 2021)
+  - Due to a change in the SCSI mid-layer, some Linux distributions may take a 
+    long time to come up if the system is rebooted while a hard disk(s) is 
+    being sanitized. Fixed.
+  - Code clean up.
+  - Updated kernel compatibility.
+
 Version 2.1.10-020 (June 2021)
   - Enabled multi-queue support for Red Hat Enterprise Linux 8 and 
     SUSE Linux Enterprise Server 15.
