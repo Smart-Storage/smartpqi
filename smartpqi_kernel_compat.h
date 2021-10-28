@@ -298,7 +298,7 @@
 #endif
 #if !defined(KFEATURE_HAS_USE_CLUSTERING)
 #define KFEATURE_HAS_USE_CLUSTERING			1
-#define IOCTL_INT int
+#define IOCTL_INT unsigned int
 #endif
 #if !defined(KFEATURE_HAS_OLD_TIMER)
 #define KFEATURE_HAS_OLD_TIMER				0
