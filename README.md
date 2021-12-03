@@ -1,6 +1,104 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.14-035 (November 2021)
+ - Fixed an issue of driver spin down when system transitions to the Suspend
+   (S3) state in certain systems.
+   - Root Cause: In certain system (based on PCI IDs), when the OS transitions
+     the system into the Suspend
+     (S3) state, the flush cache command indicates a system RESTART instead of
+     SUSPEND. This avoids drive spin-down.
+   - Fix: Avoid drive spin-down when system transitions to the Suspend state.
+   - Risk: Medium
+ - Added enable SATA NCQ priority support to sysfs. The driver needed device
+   attribute sas_ncq_prio_enable for I/O utility to enable SATA NCQ priority
+   support and to recognize I/O priority in SCSI command and pass priority
+   information to controller firmware. This device attribute works only when
+   device has NCQ priority support and the controller firmware can handle I/O
+   with NCQ priority attribute.
+ - Fixed an issue where logical drive size is not reflecting after expansion.
+   After modifying the logical drive size, lsblk command still shows previous
+   size of the logical volume.
+   - Root Cause: When the driver gets any event from firmware, the driver
+     schedules a rescan worker with a delay of 10 seconds. If the array
+     expansion completes too quickly (in a second), the driver does not catch
+     the logical drive expansion due to worker delay. Since the driver doesn't
+     detect logical drive expansion, it does not call rescan device to update
+     the new size of the logical drive to the OS. This causes lsblk to
+     report the original size.
+   - Fix: For every logical device event notification, driver rescans the
+     logical drive.
+   - Risk: Low
+ - Fixed an issue where during kdump OS is dropping into a shell if the
+     controller is in Locked-up state.
+   - Root Cause: Driver issues SIS soft reset to restore the controller to SIS
+     mode when OS boots into kdump mode. If the controller is in Locked-up
+     state, the SIS soft reset does not work. Since the controller lockup code
+     has not been cleared, the driver considers firmware is no longer up and
+     running. In this case, the driver returns an error code to OS and kdump
+     fails. After kdump failure, some OS distributions do not reboot cleanly
+     which leads to the OS dropping into a recovery shell.
+   - Fix: During kdump, driver will reboot the system if the controller is in
+     Locked-up state.
+   - Risk: Low
+ - Fixed an issue where the logical drive creation takes longer time to expose
+   logical drive.
+   - Root Cause: HZ is defined as the number of times jiffies is to be
+     incremented per second. If HZ=100, then it would take 0.01s to increment a
+     jiffy by one. If HZ=1000, then it would take 0.001 s (1ms) to increment a
+     jiffy by one. Delay of n seconds can be achieved by simply multiplying n
+     with HZ.
+     PQI_HZ macro is set to 1000 when HZ value is less than 1000. By default,
+     PQI_HZ will result into a delay of 10 s (for kernel, which has HZ=100).
+     In this case, when firmware raises an event, rescan worker will be
+     scheduled after a delay of (10 x PQI_HZ) = 100 s instead of 10 s.
+     Additionally, driver uses PQI_HZ at many instances, which might result in
+     some other issues with respect to delay.
+   - Fix: Use macro HZ for delay calculation and remove PQI_HZ.
+   - Risk: Low
+ - Fixed an issue where when one of the path fails during I/O and IOBypass path
+   gets disabled for a multipath device, the I/O is again retried in the RAID
+   path. These requests were submitted to non-existent devices in the RAID path
+   and firmware responded to those requests with Illegal request and 'Invalid
+   field in parameter list' sense data.
+   - Root Cause: Even when the device path has gone, the driver continued
+     submitting requests in RAID path and they are returned from firmware as
+     Illegal requests.
+   - Fix: When one of the paths is removed in dual domain, return DID_NO_CONNECT
+     to SCSI mid-layer of the OS. The DID_NO_CONNECT return helps multipath to
+     stop issuing Test Unit Ready and other media access commands before failing
+     the path. Failing the path quickly helps routing I/O to the opposite path
+     faster.
+   - Risk: Low
+ - Fixed an issue where the controller spins down drives during a warm boot on
+   Linux.
+   - Root Cause: The Linux SmartPQI driver has a callback function that the OS
+     calls when the system is being shut down or being rebooted. This callback
+     function calls the Flush Cache command. The command has a parameter that
+     allows the driver to indicate to the firmware the reason for the flush
+     cache (shutdown, hibernate, suspend, or restart). The OS callback function
+     does not indicate to the driver whether it is being called for shutdown or
+     warm boot, so the driver indicates to the firmware that the reason for the
+     flush cache is a system shutdown. The firmware always spins down drives in
+     this case.
+   - Fix: The SmartPQI driver uses a Linux kernel global variable to distinguish
+     between a system shutdown and a warm boot and sets the Flush Cache command
+     parameter accordingly.
+   - Risk: Low
+ - Fixed an issue where duplicate device nodes for Ultrium tape drive and medium
+   changer are being created.
+   - Root Cause: The Ultrium tape drive is a multi-LUN SCSI target. It presents
+     a LUN for the tape drive and a second LUN for the medium changer. The
+     controller firmware lists both LUNs in the report logical LUNS results, so
+     the SmartPQI driver exposes both devices to the OS. Then the OS does its
+     normal device discovery through the SCSI REPORT LUNS command, which causes
+     it to re-discover both devices a second time, resulting in duplicate device
+     nodes.
+   - Fix: When the OS re-discovers the two LUNs for the tape drive and medium
+     changer, the driver recognizes that they have already been reported and
+     blocks the OS from adding them a second time.
+   - Risk: Low
+
 Version 2.1.12-055 (August 2021)
   - Fixed an issue where duplicate device nodes for Ultrium tape drive and
     medium changer are being created.
@@ -182,5 +280,5 @@ storagedev@microchip.com.
 
 License: GPLv2
 
-June 2020
+December 2021
 

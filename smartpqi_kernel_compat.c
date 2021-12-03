@@ -26,6 +26,7 @@
 #if KFEATURE_ENABLE_SCSI_MAP_QUEUES
 #include <linux/blk-mq-pci.h>
 #endif
+extern struct device_attribute *pqi_ncq_prio_sdev_attrs;
 
 #if !KFEATURE_HAS_2011_03_QUEUECOMMAND
 
@@ -148,6 +149,9 @@ void pqi_compat_init_scsi_host_template(struct scsi_host_template *hostt)
 #endif
 #if KFEATURE_ENABLE_SCSI_MAP_QUEUES
 	hostt->map_queues = pqi_map_queues;
+#endif
+#if KFEATURE_HAS_NCQ_PRIO_SUPPORT
+	hostt->sdev_attrs = &pqi_ncq_prio_sdev_attrs;
 #endif
 }
 

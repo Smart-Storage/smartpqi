@@ -223,7 +223,7 @@
     defined(SLES12SP5) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
-#if defined(RHEL8U3) || defined(RHEL8U4)
+#if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #endif
 
@@ -248,6 +248,11 @@
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 #define ioremap_nocache ioremap
+#endif
+
+#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
+	defined(KCLASS4C) || defined(KCLASS4D) || defined(RHEL8) || defined(SLES15)
+#define KFEATURE_HAS_NCQ_PRIO_SUPPORT			1
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -330,7 +335,9 @@
 #if !defined(KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3 		0
 #endif
-
+#if !defined(KFEATURE_HAS_NCQ_PRIO_SUPPORT)
+#define KFEATURE_HAS_NCQ_PRIO_SUPPORT			0
+#endif
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
 	list_entry((pos)->member.next, typeof(*(pos)), member)

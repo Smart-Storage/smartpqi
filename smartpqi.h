@@ -104,12 +104,6 @@ struct pqi_ctrl_registers {
 	struct pqi_device_registers pqi_registers;	/* 4000h */
 };
 
-#if ((HZ) < 1000)
-#define PQI_HZ  1000
-#else
-#define PQI_HZ  (HZ)
-#endif
-
 #define PQI_DEVICE_REGISTERS_OFFSET	0x4000
 
 /* shutdown reasons for taking the controller offline */
@@ -1147,6 +1141,8 @@ struct pqi_scsi_dev {
 	u8	box[8];
 	u16	phys_connector[8];
 	u8	phy_id;
+	u8	ncq_prio_enable;
+	u8	ncq_prio_support;
 	bool	raid_bypass_configured;	/* RAID bypass configured */
 	bool	raid_bypass_enabled;	/* RAID bypass enabled */
 	u32	next_bypass_group;
@@ -1348,6 +1344,7 @@ struct pqi_ctrl_info {
 	bool		controller_online;
 	bool		block_requests;
 	bool		scan_blocked;
+	u8		logical_volume_rescan_needed : 1;
 	u8		inbound_spanning_supported : 1;
 	u8		outbound_spanning_supported : 1;
 	u8		pqi_mode_enabled : 1;
