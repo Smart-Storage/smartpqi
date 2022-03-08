@@ -70,6 +70,12 @@
 #define RHEL8
 #endif
 
+/* ----- RHEL9 variants --------- */
+#if \
+	defined(RHEL9U0)
+#define RHEL9
+#endif
+
 /* ----- SLES11 variants --------- */
 #if \
 	defined(SLES11SP0) || \
@@ -96,8 +102,7 @@
 	defined(SLES15SP0) || \
 	defined(SLES15SP1) || \
 	defined(SLES15SP2) || \
-	defined(SLES15SP3) || \
-	defined(SLES15SP4)
+	defined(SLES15SP3)
 #define SLES15
 #endif
 
@@ -212,15 +217,17 @@
 #if defined(KCLASS4B) || defined(KCLASS4C) || defined(SLES12SP4) || \
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
     defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(SLES15SP2) || defined(SLES15SP3) || defined (CENTOS7ALTARM)
+    defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
+    defined(RHEL9) || defined (CENTOS7ALTARM)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
 #define KFEATURE_HAS_KTIME64				1
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
-    defined(SLES15SP2) || defined(SLES15SP3) || defined(KCLASS5A) || \
-    defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(SLES12SP5) || defined (CENTOS7ALTARM)
+    defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
+    defined(KCLASS5A) ||  defined(KCLASS5B) || defined(KCLASS5C) || \
+    defined(KCLASS5D) ||  defined(SLES12SP5) || defined (CENTOS7ALTARM) || \
+    defined(RHEL9)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
 #if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5)
@@ -230,28 +237,33 @@
 #if defined(KCLASS3D)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #endif
-#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3)
+#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
+    defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2) || \
+    defined(SLES15SP3) || defined(SLES15SP4) || defined(RHEL9)
 #define dma_zalloc_coherent	dma_alloc_coherent
 #define shost_use_blk_mq(x)	1
 #define KFEATURE_HAS_USE_CLUSTERING			0
 #endif
 
 #if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-    defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3)
+    defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3) || \
+    defined(SLES15SP4) || defined(RHEL9)
 #define IOCTL_INT	unsigned int
 #else
 #define IOCTL_INT	int
 #endif
 
-#if defined(KCLASS5C) || defined(KCLASS5D)
+#if defined(KCLASS5C) || defined(KCLASS5D) || defined(SLES15SP4) || \
+    defined(RHEL9)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 #define ioremap_nocache ioremap
 #endif
 
-#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
-	defined(KCLASS4C) || defined(KCLASS4D) || defined(RHEL8) || defined(SLES15)
+#if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
+    defined(KCLASS5D) || defined(KCLASS4C) || defined(KCLASS4D) || \
+    defined(RHEL8) || defined(SLES15) || defined(SLES15SP4) || \
+    defined(RHEL9)
 #define KFEATURE_HAS_NCQ_PRIO_SUPPORT			1
 #endif
 
@@ -337,6 +349,40 @@
 #endif
 #if !defined(KFEATURE_HAS_NCQ_PRIO_SUPPORT)
 #define KFEATURE_HAS_NCQ_PRIO_SUPPORT			0
+#endif
+#if !defined(KFEATURE_HAS_GLOBAL_SCSI_DONE)
+#define KFEATURE_HAS_GLOBAL_SCSI_DONE			0
+#endif
+/* Check for change in host device attributes are defined */
+#if !defined(KFEATURE_HAS_SDEV_GROUPS)
+#define KFEATURE_HAS_SDEV_GROUPS			0
+#	define PQI_DEVICE_ATTRIBUTE device_attribute
+#	define PQI_ATTR
+#	define PQI_ATTRIBUTE_GROUPS(x)
+#	define PQI_ATTRIBUTE(x) (x)
+#	define PQI_SDEV_ATTRS \
+	.sdev_attrs = pqi_sdev_attrs
+#	define PQI_SHOST_ATTRS \
+	.shost_attrs = pqi_shost_attrs
+/* Newer device attribute groups defined */
+#else
+#	define PQI_DEVICE_ATTRIBUTE attribute
+#	define PQI_ATTRIBUTE_GROUPS(x) \
+		ATTRIBUTE_GROUPS(x);
+#	define PQI_ATTRIBUTE(x) (x.attr)
+#	define PQI_SDEV_ATTRS \
+	.sdev_groups = pqi_sdev_groups
+#	define PQI_SHOST_ATTRS \
+	.shost_groups = pqi_shost_groups
+#endif
+
+#if !defined(KFEATURE_HAS_SCSI_CMD_TO_RQ)
+#define  KFEATURE_HAS_SCSI_CMD_TO_RQ			0
+#	define PQI_SCSI_REQUEST(x) \
+		x->request
+#else
+#	define PQI_SCSI_REQUEST(x) \
+		scsi_cmd_to_rq(x)
 #endif
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
@@ -434,6 +480,10 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 #define PCI_VENDOR_ID_NTCOM		0x1dfc
 #endif
 
+#if !defined(PCI_VENDOR_ID_NT)
+#define PCI_VENDOR_ID_NT		0x1f0c
+#endif
+
 #if !defined(PCI_VENDOR_ID_ZTE)
 #define PCI_VENDOR_ID_ZTE		0x1cf2
 #endif
@@ -470,8 +520,13 @@ static inline unsigned long wait_for_completion_io(struct completion *x)
 static inline void pqi_scsi_done(struct scsi_cmnd *scmd)
 {
 	pqi_prep_for_scsi_done(scmd);
+#if !KFEATURE_HAS_GLOBAL_SCSI_DONE
 	if (scmd && scmd->scsi_done)
 		scmd->scsi_done(scmd);
+#else
+	if (scmd)
+		scsi_done(scmd);
+#endif
 }
 
 #else
@@ -541,7 +596,7 @@ static inline u16 pqi_get_hw_queue(struct pqi_ctrl_info *ctrl_info,
 
 #if KFEATURE_HAS_MQ_SUPPORT
 	if (shost_use_blk_mq(scmd->device->host))
-		hw_queue = blk_mq_unique_tag_to_hwq(blk_mq_unique_tag(scmd->request));
+		hw_queue = blk_mq_unique_tag_to_hwq(blk_mq_unique_tag(PQI_SCSI_REQUEST(scmd)));
 	else
 		hw_queue = smp_processor_id();
 #else

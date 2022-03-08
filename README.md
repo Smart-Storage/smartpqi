@@ -1,6 +1,56 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.16-030 (February 2022)
+ - Fixed an issue where the removal of a drive from the OS could be delayed up
+   to 30 seconds after being physically pulled.
+   - Root cause: The driver was retrying a LUN reset three times even though
+     the return code indicated the LUN was no longer valid. There was a 10
+     seconds delay between each retry. Additionally, the rescan worker was
+     scheduled to run 10 seconds after the driver received the event.
+   - Fix: Check the response code returned from the LUN Reset Task Management
+     function and if it indicates the LUN is not valid, do not retry. Also,
+     reduced the delay of the rescan worker to 5 seconds for the event
+     handler only.
+   - Risk: Low
+ -  Fixed an issue where the outstanding requests and accessing the SCSI
+    attributes for a device post linkdown leads to a hang.
+    - Root cause: Post linkdown, driver does not fail the outstanding
+      requests leading to long wait time before all the I/Os eventually
+      fail. Also, access to the SCSI attributes by the host applications
+      lead to a system hang.
+ - Fix: Sanity check added in various functions to block the host applications
+   from accessing the SCSI attributes of a device when the controller goes
+   offline.
+   - Risk: Low
+ - Fixed an issue of disabling a controller by writing to this node in
+   sysfs: /sys/bus/pci/devices/<Domain>:<Bus>:<Device>.<Function>/remove
+   can cause processes with outstanding I/O to the controller or that attempt
+   to access device attributes via sysfs for devices exposed by the SmartPQI
+   driver to appear hung.
+   - Root cause: Disabling the controller using this technique can cause
+     outstanding I/O requests to take a long time to fail, which can cause
+     processes accessing the controller to appear hung.
+ - Fix: The driver now promptly fails outstanding I/O requests and the device
+   attribute accesses for a controller is removed using this technique.
+   - Risk: Low
+ - Fixed an issue where the Linux kernel was not creating symbolic links in
+   sysfs between SATA drives and their enclosure.
+   - Root cause: The driver was enabling the UNIQUE_WWID_IN_REPORT_PHYS_LUN
+     PQI feature, which causes the firmware to return a WWID for SATA drives
+     that is derived from a unique ID read from the SATA drive itself. The
+     driver was exposing this WWID as the drive's SAS address. However, because
+     this SAS address does not match the SAS address returned by an enclosure's
+     SES Page 0xA data, the Linux kernel was unable to match a SATA drive with
+     its enclosure.
+ - Fix: The driver no longer enables the UNIQUE_WWID_IN_REPORT_PHYS_LUN PQI
+   feature as it is not required.
+   - Risk: Low
+ - Fixed an issue where the controller boot timeout error message displays
+   wrong number of seconds.
+   - Root cause: A recent change to the driver inadvertently changed the units
+     displayed from seconds to Linux kernel "jiffies".
+
 Version 2.1.14-035 (November 2021)
  - Fixed an issue of driver spin down when system transitions to the Suspend
    (S3) state in certain systems.

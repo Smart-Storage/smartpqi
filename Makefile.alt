@@ -54,7 +54,13 @@ KERNEL_CLASS := $(shell \
 OSVENDOR := $(shell \
    if [ -f /etc/redhat-release ]; \
    then \
-      if [ -n "`egrep 'Ootpa|release 8' /etc/redhat-release`" -a \
+      if [ -n "`egrep 'Plow|release 9' /etc/redhat-release`" -a \
+           $(KVER_SHORT) = "5.14" ]; \
+      then \
+         UPDATE=`grep "release 9" /etc/redhat-release | \
+            sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
+         echo "RHEL9U$${UPDATE}"; \
+      elif [ -n "`egrep 'Ootpa|release 8' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "4.18" ]; \
       then \
          UPDATE=`grep "release 8" /etc/redhat-release | \
@@ -136,14 +142,50 @@ KBDIR := ${KDIR}/build
 PWD   := $(shell pwd)
 
 BLK := $(shell \
-   GF=`find -L $(KDIR) -name blkdev.h -size +0 | tail -1`; \
-   grep blk_rq_is_passthrough $${GF}; \
+   GF=`find -L $(KDIR) -name blkdev.h -o -name blk-mq.h | xargs grep blk_rq_is_passthrough | tail -1`; \
+   echo $$GF; \
 )
 
 MORE_CFLAGS := $(shell \
    if [ -z "$(BLK)" ]; \
    then \
       echo "EXTRA_CFLAGS+=-DKFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH"; \
+   fi; \
+)
+
+FALLTHRU := $(shell \
+   GF=`find -L $(KDIR)/*/include/linux -type f -print | xargs grep '__has_attribute(__fallthrough__)'`; \
+   echo $$GF; \
+)
+
+MORE_CFLAGS += $(shell \
+   if [ ! -z "$(FALLTHRU)" ]; \
+   then \
+      echo "EXTRA_CFLAGS+=-Wno-implicit-fallthrough"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name scsi_host.h | xargs grep scsi_done | tail -1`; \
+   if [ -z "$$GF" ]; \
+   then \
+      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_GLOBAL_SCSI_DONE"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name scsi_cmnd.h | xargs grep scsi_cmd_to_rq | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SCSI_CMD_TO_RQ"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name scsi_host.h | xargs grep shost_groups | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SDEV_GROUPS"; \
    fi; \
 )
 
