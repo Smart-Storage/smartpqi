@@ -182,6 +182,14 @@ MORE_CFLAGS += $(shell \
 )
 
 MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name scsi_cmnd.h | xargs grep scsi_cmd_priv | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SCSI_CMD_PRIV"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_host.h | xargs grep shost_groups | tail -1`; \
    if [ ! -z "$$GF" ]; \
    then \

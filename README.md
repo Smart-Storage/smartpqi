@@ -1,6 +1,50 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.18-045 (August 2022)
+ - Added support for Multi-Actuator disk drives.
+
+ - Added support for displaying controller firmware version in the OS message
+   log. The controller firmware version is printed to OS message log during
+   driver initialization.
+
+ - Added support for a controller ready timeout module parameter 
+   (ctrl_ready_timeout). The valid range is 0 or 30-1800 seconds. The default
+   value is 0, which causes the driver to use a timeout of 180 seconds
+   (3 minutes).
+
+ - Added support for deleting a LUN via sysfs using the following syntax:
+   echo 1 > /sys/block/sdX/device/delete
+
+ - Added module parameter to disable managed interrupts
+   (disable_managed_interrupts=1).
+
+ - Fixed a race condition where the driver can access the RAID map when using
+   IOBypass during a RAID configuration change.
+   - Root cause: A race condition in the driver might cause it to access a
+     stale RAID map when a logical drive is reconfigured.
+   - Fix: Modified the driver logic to
+     - Invalidate a RAID map at an early stage when a RAID configuration
+       change is detected.
+     - Switch to a new RAID map only after the driver detects that the RAID
+       map has changed.
+
+ - Fixed an issue where the sg_map tool issues SCSI READ BLOCK LIMITS (0x5)
+   command and the firmware never completes it, causing a system call trace
+   and sg_map hang.
+   - Root cause: Driver is sending an incorrect data direction flag for the
+     RAID path request.
+   - Fix: Corrected the data direction flag for the RAID path request.
+
+ - Fixed an issue where PQI Reset might fail with an error "- 6" if
+   firmware takes more than 100 ms to complete Reset.
+   - Root cause: Method used by the driver to detect controller firmware
+     crash during PQI Reset was incorrect in some cases.
+   - Fix: Changed method used by the driver to detect controller firmware
+     crash during PQI Reset.
+
+ - Kernel compatibility updates.
+
 Version 2.1.16-030 (February 2022)
  - Fixed an issue where the removal of a drive from the OS could be delayed up
    to 30 seconds after being physically pulled.
@@ -330,5 +374,5 @@ storagedev@microchip.com.
 
 License: GPLv2
 
-December 2021
+August 2022
 

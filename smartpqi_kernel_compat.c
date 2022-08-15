@@ -122,16 +122,26 @@ static int pqi_map_queues(struct Scsi_Host *shost)
 {
 	struct pqi_ctrl_info *ctrl_info = shost_to_hba(shost);
 
+	if (!ctrl_info->disable_managed_interrupts) {
 #if KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1
-	return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev);
+		return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev);
 #elif KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2
-	return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev, 0);
+		return blk_mq_pci_map_queues(&shost->tag_set, ctrl_info->pci_dev, 0);
 #elif KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3
-	return blk_mq_pci_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
-					ctrl_info->pci_dev, 0);
+		return blk_mq_pci_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
+						ctrl_info->pci_dev, 0);
 #else
 	#error "A version for KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES has not been defined."
 #endif
+	} else {
+#if KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1
+		return blk_mq_map_queues(&shost->tag_set);
+#elif KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V2
+		return blk_mq_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT]);
+#else
+	#error "A version for KFEATURE_HAS_BLK_MQ_MAP_QUEUES has not been defined."
+#endif
+	}
 }
 #endif /* KFEATURE_ENABLE_SCSI_MAP_QUEUES */
 
@@ -386,3 +396,10 @@ int pqi_pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
 	return num_vectors_enabled;
 #endif
 }
+
+#if KFEATURE_HAS_SCSI_CMD_PRIV
+struct pqi_cmd_priv *pqi_cmd_priv(struct scsi_cmnd *cmd)
+{
+	return scsi_cmd_priv(cmd);
+}
+#endif

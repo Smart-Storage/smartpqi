@@ -17,6 +17,9 @@
  *
  */
 
+/* needed for struct definitions */
+#include <linux/pci.h>
+
 #if !defined(_SMARTPQI_KERNEL_COMPAT_H)
 #define _SMARTPQI_KERNEL_COMPAT_H
 
@@ -162,12 +165,13 @@
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #endif
-#elif defined(RHEL8)
+#elif defined(RHEL8) || defined(RHEL9)
 #define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V2 		1
 #elif defined(SLES11)
 #define KFEATURE_HAS_WAIT_FOR_COMPLETION_IO		0
 #define KFEATURE_HAS_NO_WRITE_SAME			0
@@ -198,10 +202,13 @@
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
 #if defined(SLES15SP0)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V1 		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1 		1
 #elif defined(SLES15SP1)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2 		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1 		1
 #else
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3 		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V2 		1
 #endif
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
@@ -230,7 +237,7 @@
     defined(RHEL9)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
-#if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5)
+#if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5) || defined(RHEL8U6)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #endif
 
@@ -347,6 +354,12 @@
 #if !defined(KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V3 		0
 #endif
+#if !defined(KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1)
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1 		0
+#endif
+#if !defined(KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V2)
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V2 		0
+#endif
 #if !defined(KFEATURE_HAS_NCQ_PRIO_SUPPORT)
 #define KFEATURE_HAS_NCQ_PRIO_SUPPORT			0
 #endif
@@ -384,6 +397,23 @@
 #	define PQI_SCSI_REQUEST(x) \
 		scsi_cmd_to_rq(x)
 #endif
+
+#if !defined(KFEATURE_HAS_SCSI_CMD_PRIV)
+#define KFEATURE_HAS_SCSI_CMD_PRIV			0
+#	define PQI_CMD_PRIV
+#	define PQI_SCSI_CMD_RESIDUAL(scmd) \
+		(scmd->SCp.this_residual)
+#else
+#	define PQI_CMD_PRIV \
+	.cmd_size = sizeof(struct pqi_cmd_priv),
+	struct pqi_cmd_priv {
+		int this_residual;
+	};
+	struct pqi_cmd_priv *pqi_cmd_priv(struct scsi_cmnd *cmd);
+#	define PQI_SCSI_CMD_RESIDUAL(scmd) \
+		pqi_cmd_priv(scmd)->this_residual
+#endif
+
 #if !defined(list_next_entry)
 #define list_next_entry(pos, member) \
 	list_entry((pos)->member.next, typeof(*(pos)), member)
@@ -486,6 +516,14 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_ZTE)
 #define PCI_VENDOR_ID_ZTE		0x1cf2
+#endif
+
+#if !defined(PCI_VENDOR_ID_RAMAXEL)
+#define PCI_VENDOR_ID_RAMAXEL		0x1cc4
+#endif
+
+#if !defined(PCI_VENDOR_ID_LENOVO)
+#define PCI_VENDOR_ID_LENOVO		0x1d49
 #endif
 
 #if !defined(offsetofend)

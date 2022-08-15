@@ -98,6 +98,8 @@ struct sis_base_struct {
 
 #pragma pack()
 
+unsigned int sis_ctrl_ready_timeout_secs = SIS_CTRL_READY_TIMEOUT_SECS;
+
 static int sis_wait_for_ctrl_ready_with_timeout(struct pqi_ctrl_info *ctrl_info,
 	unsigned int timeout_secs)
 {
@@ -134,7 +136,7 @@ static int sis_wait_for_ctrl_ready_with_timeout(struct pqi_ctrl_info *ctrl_info,
 int sis_wait_for_ctrl_ready(struct pqi_ctrl_info *ctrl_info)
 {
 	return sis_wait_for_ctrl_ready_with_timeout(ctrl_info,
-		SIS_CTRL_READY_TIMEOUT_SECS);
+		sis_ctrl_ready_timeout_secs);
 }
 
 int sis_wait_for_ctrl_ready_resume(struct pqi_ctrl_info *ctrl_info)
@@ -206,6 +208,7 @@ static int sis_send_sync_cmd(struct pqi_ctrl_info *ctrl_info,
 
 	/* Disable doorbell interrupts by masking all interrupts. */
 	writel(~0, &registers->sis_interrupt_mask);
+	usleep_range(1000, 2000);
 
 	/*
 	 * Force the completion of the interrupt mask register write before
@@ -395,6 +398,7 @@ static int sis_wait_for_doorbell_bit_to_clear(
 static inline int sis_set_doorbell_bit(struct pqi_ctrl_info *ctrl_info, u32 bit)
 {
 	writel(bit, &ctrl_info->registers->sis_host_to_ctrl_doorbell);
+	usleep_range(1000, 2000);
 
 	return sis_wait_for_doorbell_bit_to_clear(ctrl_info, bit);
 }
@@ -435,6 +439,7 @@ int sis_reenable_sis_mode(struct pqi_ctrl_info *ctrl_info)
 void sis_write_driver_scratch(struct pqi_ctrl_info *ctrl_info, u32 value)
 {
 	writel(value, &ctrl_info->registers->sis_driver_scratch);
+	usleep_range(1000, 2000);
 }
 
 u32 sis_read_driver_scratch(struct pqi_ctrl_info *ctrl_info)
