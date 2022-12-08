@@ -1149,7 +1149,7 @@ struct pqi_scsi_dev {
 	u8	phy_id;
 	u8	ncq_prio_enable;
 	u8	ncq_prio_support;
-        u8      multi_lun_device_lun_count;
+	u8	lun_count;
 	bool	raid_bypass_configured;	/* RAID bypass configured */
 	bool	raid_bypass_enabled;	/* RAID bypass enabled */
 	u32	next_bypass_group[RAID_MAP_MAX_DATA_DISKS_PER_ROW];
@@ -1326,7 +1326,6 @@ struct pqi_ctrl_info {
 	dma_addr_t	error_buffer_dma_handle;
 	size_t		sg_chain_buffer_length;
 	unsigned int	num_queue_groups;
-	u16		max_hw_queue_index;
 	u16		num_elements_per_iq;
 	u16		num_elements_per_oq;
 	u16		max_inbound_iu_length_per_firmware;
@@ -1390,8 +1389,9 @@ struct pqi_ctrl_info {
 	u64		sas_address;
 
 	struct pqi_io_request *io_request_pool;
-	u16		next_io_request_slot;
-
+#if !defined(KFEATURE_HAS_HOST_TAGSET_SUPPORT)
+	u16		per_cpu_factor;
+#endif
 	struct pqi_event events[PQI_NUM_SUPPORTED_EVENTS];
 	struct work_struct event_work;
 
@@ -1418,7 +1418,9 @@ struct pqi_ctrl_info {
 	u16		ofa_cancel_reason;
 	enum pqi_ctrl_removal_state ctrl_removal_state;
 
+#if !defined(KFEATURE_HAS_HOST_TAGSET_SUPPORT)
 	atomic_t	total_scmds_outstanding;
+#endif
 };
 
 enum pqi_ctrl_mode {

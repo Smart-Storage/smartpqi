@@ -403,3 +403,55 @@ struct pqi_cmd_priv *pqi_cmd_priv(struct scsi_cmnd *cmd)
 	return scsi_cmd_priv(cmd);
 }
 #endif
+
+#if !KFEATURE_HAS_HOST_TAGSET_SUPPORT
+
+struct pqi_io_request *pqi_get_io_request(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd)
+{
+	struct pqi_io_request *io_request;
+	u16 i = smp_processor_id() * ctrl_info->per_cpu_factor;
+
+	while (1) {
+		io_request = &ctrl_info->io_request_pool[i];
+		if (atomic_inc_return(&io_request->refcount) == 1)
+			break;
+		atomic_dec(&io_request->refcount);
+		i = (i + 1) % ctrl_info->max_io_slots;
+	}
+
+	return io_request;
+}
+
+#else
+
+struct pqi_io_request *pqi_get_io_request(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd)
+{
+	struct pqi_io_request *io_request;
+	u16 i;
+
+	if (scmd) {
+		u32 blk_tag = blk_mq_unique_tag(PQI_SCSI_REQUEST(scmd));
+
+		i = blk_mq_unique_tag_to_tag(blk_tag);
+		io_request = &ctrl_info->io_request_pool[i];
+		if (atomic_inc_return(&io_request->refcount) > 1) {
+			atomic_dec(&io_request->refcount);
+			return NULL;
+		}
+	} else {
+		/*
+		 * benignly racy - may have to wait for an open slot.
+		 */
+		i = 0;
+		while (1) {
+			io_request = &ctrl_info->io_request_pool[ctrl_info->scsi_ml_can_queue + i];
+			if (atomic_inc_return(&io_request->refcount) == 1)
+				break;
+			atomic_dec(&io_request->refcount);
+			i = (i + 1) % PQI_RESERVED_IO_SLOTS;
+		}
+	}
+
+	return io_request;
+}
+#endif

@@ -48,6 +48,9 @@ KERNEL_CLASS := $(shell \
       else \
         echo "KCLASS$(KVERSION)D"; \
       fi; \
+   elif [ $(KVERSION) -eq 6 ]; \
+   then \
+      echo "KCLASS$(KVERSION)A"; \
    fi; \
 )
 
@@ -105,7 +108,11 @@ OSVENDOR := $(shell \
       if [ -n "`grep 'release 20.03' /etc/openEuler-release`" -a \
            $(KVER_SHORT) = "4.19" ]; \
       then \
-         echo "KCLASS5B"; \
+         echo "OEULER2003"; \
+      elif [ -n "`grep 'release 22.03' /etc/openEuler-release`" -a \
+             $(KVER_SHORT) = "5.10" ]; \
+      then \
+         echo "OEULER2203"; \
       fi; \
    elif [ -f /etc/os-release ]; \
    then \
@@ -194,6 +201,14 @@ MORE_CFLAGS += $(shell \
    if [ ! -z "$$GF" ]; \
    then \
       echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SDEV_GROUPS"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name scsi_host.h | xargs grep host_tagset | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_HOST_TAGSET_SUPPORT"; \
    fi; \
 )
 

@@ -1,6 +1,60 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.22-035 (November 2022)
+ - Switched to using "blk-mq" tags instead of linear searching.
+
+ - Fixed an issue where the maximum LUN number supported by SmartPQI is not
+   set correctly.
+   - Root Cause: When multi-actuator support was added to SmartPQI, the
+     maximum number of LUNs supported by SmartPQI was supposed to be changed
+     from unlimited to 256, but the setting was inadvertently left at
+     unlimited.
+   - Fix: The maximum LUN number supported by SmartPQI is now set correctly
+     to 256.
+   - Risk: Low
+
+ - Fixed an issue where Linux performance drops when large CPU affinity is
+   used.
+   - Root Cause: The driver was using a single hint variable in the function
+     that gets a free I/O request element from the I/O request pool that was
+     causing contention when it was utilized by a large number of threads.
+
+ - Fix: Eliminate the initial contention by removing the hint and instead
+   assign each CPU its own starting point within the request element array
+   based on its CPU number.
+   - Risk: Low
+
+ - Fixed an issue to update hardware queue mapping when ?block-mq? is not
+   enabled or supported.
+   - Root Cause: No mapping for CPUs exceeding the maximum queue group count.
+   - Fix: Updated the mapping algorithm to provide a valid mapping for all
+     CPUs.
+   - Risk: Low
+
+ - Fixed an issue where "blk-mq" and managed interrupts support are not
+   enabled by default for 5.x Linux kernels.
+   - Root Cause: The appropriate definitions are not enabled in the build
+     files.
+   - Fix: Enable the appropriate flags for 5.x Linux kernels.
+   - Risk: Low
+
+ - Fixed a problem where the driver does not issue flush cache to physical
+   drives during PCIe hot remove.
+   - Root Cause: During controller PCIe graceful hot remove, the driver does
+     not send commands to the drives to flush the cache.
+   - Fix: Add Graceful Removal state check in remove path to allow flush
+     cache to be issued to the physical drives.
+   - Risk: Low
+
+ - In some situations, the presence of a multi-actuator drive could cause no
+   drives to be listed for a controller, during OS installation. The driver
+   can also hit an unrecoverable Call trace during rmmod.
+   - Root Cause: The pqi_slave_destroy routine is called multiple times for
+     a multi-LUN device that causes a Call trace.
+   - Fix: Remove device only upon the last pqi_slave_destroy call.
+   - Risk: Low
+
 Version 2.1.18-045 (August 2022)
  - Added support for Multi-Actuator disk drives.
 
