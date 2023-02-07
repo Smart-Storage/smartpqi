@@ -1,7 +1,7 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
-Version 2.1.22-035 (November 2022)
+Version 2.1.20-035 (November 2022)
  - Switched to using "blk-mq" tags instead of linear searching.
 
  - Fixed an issue where the maximum LUN number supported by SmartPQI is not
