@@ -126,6 +126,10 @@ OSVENDOR := $(shell \
             PATCHLEVEL="0"; \
          fi; \
          echo "SLES15SP$${PATCHLEVEL}"; \
+      elif [ -n "`grep 'VERSION="V10 (Sword)"' /etc/os-release`" -a \
+             $(KVER_SHORT) = "4.19" ]; \
+      then \
+         echo "K10SP2"; \
       else \
          echo "KERNEL"; \
       fi; \

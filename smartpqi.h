@@ -1127,6 +1127,7 @@ struct pqi_scsi_dev {
 	u8	volume_offline : 1;
 	u8	rescan : 1;
 	u8	ignore_device : 1;
+	u8	erase_in_progress : 1;
 	bool	aio_enabled;		/* only valid for physical disks */
 	bool	in_remove;
 	bool	device_offline;
@@ -1166,7 +1167,7 @@ struct pqi_scsi_dev {
 
 	struct pqi_stream_data stream_data[NUM_STREAMS_PER_LUN];
         atomic_t scsi_cmds_outstanding[PQI_MAX_LUNS_PER_DEVICE];
-	atomic_t raid_bypass_cnt;
+	unsigned int raid_bypass_cnt;
 };
 
 /* VPD inquiry pages */

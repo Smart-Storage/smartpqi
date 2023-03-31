@@ -1,6 +1,50 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+Version 2.1.22-040 (March 2023)
+ - Added support for NCQ priority in the RAID path. Enable the NCQ priority
+   feature for the physical device in the RAID path when IOBypass is disabled.
+
+ - Fixed an issue where drivers are not sending priority bit to SATA SMR drives.
+   - Root Cause: The driver did not support this functionality on this type of
+     device.
+   - Fix: Enable NCQ priority feature for a physical SATA SMR device in the
+     RAID path.
+   - Risk: Low
+
+ - Fixed an issue of sending a command to physical devices during device
+   discovery.
+   - Root Cause: The smartPQI driver was sending a SCSI TEST UNIT READY command
+     to physical devices during device discovery. The driver's device discovery
+     thread hung if a physical device failed to complete this command.
+   - Fix: The driver no longer sends a SCSI TEST UNIT READY command to physical
+     devices during device discovery. It uses a different method to detect
+     sanitize/erase in progress.
+   - Risk: Low
+
+ - Fixed an issue where the OS crashes on aarch64 servers using the out-of-box
+   driver during driver initialization.
+   - Root Cause: The driver attempts to communicate with the controller
+     firmware using a writew() kernel call to a byte aligned address. This 
+     works on x86_64 servers but fails on aarch64 systems.
+   - Fix: Change the writew() to two writeb() calls.
+   - Risk: Medium
+
+ - Fixed an issue where the OS crashes when a drive is hot removed during I/O
+   stress test.
+   - Root Cause: An I/O request pointer can be invalid if the block layer
+     provides incorrect multi-queue host tag. This can lead to invalid I/O
+     request pointer deference.
+   - Fix: Validate the block layer provided host tag and handle the I/O request
+     pointer properly if an invalid host tag is received.
+   - Risk: Low
+
+ - Fixed an issue with the driver not mapping full length of PCI BAR 0.
+   - Root Cause: The driver is only mapping the controller registers up to and
+     including the PQI standard registers.
+   - Fix: Update the length to include the full size of PCI BAR.
+   - Risk: Low
+
 Version 2.1.20-035 (November 2022)
  - Switched to using "blk-mq" tags instead of linear searching.
 
