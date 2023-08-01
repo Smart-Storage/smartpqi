@@ -476,7 +476,8 @@ Version 1.1.2-120 (September 2017)
 Version 1.0.4-101
   - Initial public driver release.
 
-#Contact
+## Contact
+
 To provide kernel/driver development feedback, send email to 
 storagedev@microchip.com.
 
