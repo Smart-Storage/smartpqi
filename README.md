@@ -1,7 +1,7 @@
 # smartpqi
-Microchip PQI Linux Driver 
+**Microchip PQI Linux Driver**
 
-##Driver Build
+## Driver Build
 
 To build the driver outside of a kernel tree.
   - make -f Makefile.alt
@@ -26,7 +26,7 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
   - dkms build -m smartpqi -v 2.1.24.046
   - dkms install -m smartpqi -v 2.1.24.046
 
-##Changelog
+## Changelog
 
 Version 2.1.24-046 (August 2023)
  - Added support for ABORT handler in the driver in order to avoid I/O stalls
