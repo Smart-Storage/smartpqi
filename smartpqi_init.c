@@ -1,6 +1,6 @@
 /*
  *    driver for Microchip PQI-based storage controllers
- *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2019-2023 Microchip Technology Inc. and its subsidiaries
  *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
@@ -42,11 +42,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.22-040"
+#define DRIVER_VERSION		"2.1.24-046"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		22
-#define DRIVER_REVISION		32
+#define DRIVER_RELEASE		24
+#define DRIVER_REVISION		46
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -58,13 +58,15 @@
 #define PQI_POST_RESET_DELAY_SECS			5
 #define PQI_POST_OFA_RESET_DELAY_UPON_TIMEOUT_SECS	10
 
+#define PQI_NO_COMPLETION	((void *)-1)
+
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-b7f1535/s-ed725ab)" " (d147/s325)");
+	DRIVER_VERSION " (d-00aeba3/s-4768cf4)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-b7f1535/s-ed725ab)");
+	DRIVER_VERSION " (d-00aeba3/s-4768cf4)");
 #endif
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
@@ -96,12 +98,13 @@ static int pqi_aio_submit_r56_write_io(struct pqi_ctrl_info *ctrl_info,
 static void pqi_ofa_ctrl_quiesce(struct pqi_ctrl_info *ctrl_info);
 static void pqi_ofa_ctrl_unquiesce(struct pqi_ctrl_info *ctrl_info);
 static int pqi_ofa_ctrl_restart(struct pqi_ctrl_info *ctrl_info, unsigned int delay_secs);
-static void pqi_ofa_setup_host_buffer(struct pqi_ctrl_info *ctrl_info);
-static void pqi_ofa_free_host_buffer(struct pqi_ctrl_info *ctrl_info);
-static int pqi_ofa_host_memory_update(struct pqi_ctrl_info *ctrl_info);
+static void pqi_host_setup_buffer(struct pqi_ctrl_info *ctrl_info, struct pqi_host_memory_descriptor *host_memory_descriptor, u32 total_size, u32 min_size);
+static void pqi_host_free_buffer(struct pqi_ctrl_info *ctrl_info, struct pqi_host_memory_descriptor *host_memory_descriptor);
+static int pqi_host_memory_update(struct pqi_ctrl_info *ctrl_info, struct pqi_host_memory_descriptor *host_memory_descriptor, u16 function_code);
 static int pqi_device_wait_for_pending_io(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_scsi_dev *device, u8 lun, unsigned long timeout_msecs);
 static void pqi_fail_all_outstanding_requests(struct pqi_ctrl_info *ctrl_info);
+static void pqi_tmf_worker(struct work_struct *work);
 
 /* for flags argument to pqi_submit_raid_request_synchronous() */
 #define PQI_SYNC_FLAGS_INTERRUPTABLE	0x1
@@ -343,15 +346,15 @@ static inline void pqi_scsi_block_requests(struct pqi_ctrl_info *ctrl_info)
 		num_loops++;
 		if (num_loops == 10) {
 			dev_warn(&ctrl_info->pci_dev->dev,
-			"shost %d Waited for %d  milli seconds to be unbusy\n",
-			shost->host_no, num_loops * msecs_sleep);
+				"shost %d Waited for %d  milli seconds to be unbusy\n",
+				shost->host_no, num_loops * msecs_sleep);
 			msecs_sleep = 500;
 		}
 		msleep(msecs_sleep);
-		if(num_loops % 20 == 0)
+		if (num_loops % 20 == 0)
 			dev_warn(&ctrl_info->pci_dev->dev,
-			"shost %d waited for %d more seconds to be unbusy\n",
-			shost->host_no, msecs_sleep * 20 / 1000);
+				"shost %d waited for %d more seconds to be unbusy\n",
+				shost->host_no, msecs_sleep * 20 / 1000);
 	}
 }
 
@@ -463,6 +466,21 @@ static inline bool pqi_device_in_remove(struct pqi_scsi_dev *device)
 	return device->in_remove;
 }
 
+static inline void pqi_device_reset_start(struct pqi_scsi_dev *device, u8 lun)
+{
+	device->in_reset[lun] = true;
+}
+
+static inline void pqi_device_reset_done(struct pqi_scsi_dev *device, u8 lun)
+{
+	device->in_reset[lun] = false;
+}
+
+static inline bool pqi_device_in_reset(struct pqi_scsi_dev *device, u8 lun)
+{
+	return device->in_reset[lun];
+}
+
 static inline int pqi_event_type_to_event_index(unsigned int event_type)
 {
 	int index;
@@ -535,8 +553,7 @@ static inline bool pqi_is_io_high_priority(struct pqi_scsi_dev *device, struct s
 	io_high_prio = false;
 
 	if (device->ncq_prio_enable) {
-		priority_class =
-			IOPRIO_PRIO_CLASS(req_get_ioprio(PQI_SCSI_REQUEST(scmd)));
+		priority_class = IOPRIO_PRIO_CLASS(req_get_ioprio(PQI_SCSI_REQUEST(scmd)));
 		if (priority_class == IOPRIO_CLASS_RT) {
 			/* Set NCQ priority for read/write commands. */
 			switch (scmd->cmnd[0]) {
@@ -566,8 +583,7 @@ static int pqi_map_single(struct pci_dev *pci_dev,
 	if (!buffer || buffer_length == 0 || data_direction == DMA_NONE)
 		return 0;
 
-	bus_address = dma_map_single(&pci_dev->dev, buffer, buffer_length,
-		data_direction);
+	bus_address = dma_map_single(&pci_dev->dev, buffer, buffer_length, data_direction);
 	if (dma_mapping_error(&pci_dev->dev, bus_address))
 		return -ENOMEM;
 
@@ -924,8 +940,7 @@ static int pqi_flush_cache(struct pqi_ctrl_info *ctrl_info,
 
 	flush_cache->shutdown_event = shutdown_event;
 
-	rc = pqi_send_ctrl_raid_request(ctrl_info, SA_FLUSH_CACHE, flush_cache,
-		sizeof(*flush_cache));
+	rc = pqi_send_ctrl_raid_request(ctrl_info, SA_FLUSH_CACHE, flush_cache, sizeof(*flush_cache));
 
 	kfree(flush_cache);
 
@@ -1182,7 +1197,7 @@ out:
 	return rc;
 }
 
-static inline int pqi_report_phys_luns(struct pqi_ctrl_info *ctrl_info, void **buffer)
+static int pqi_report_phys_luns(struct pqi_ctrl_info *ctrl_info, void **buffer)
 {
 	int rc;
 	unsigned int i;
@@ -1277,20 +1292,16 @@ static int pqi_get_device_lists(struct pqi_ctrl_info *ctrl_info,
 	logdev_data = *logdev_list;
 
 	if (logdev_data) {
-		logdev_list_length =
-			get_unaligned_be32(&logdev_data->header.list_length);
+		logdev_list_length = get_unaligned_be32(&logdev_data->header.list_length);
 	} else {
 		memset(&report_lun_header, 0, sizeof(report_lun_header));
-		logdev_data =
-			(struct report_log_lun_list *)&report_lun_header;
+		logdev_data = (struct report_log_lun_list *)&report_lun_header;
 		logdev_list_length = 0;
 	}
 
-	logdev_data_length = sizeof(struct report_lun_header) +
-		logdev_list_length;
+	logdev_data_length = sizeof(struct report_lun_header) + logdev_list_length;
 
-	internal_logdev_list = kmalloc(logdev_data_length +
-		sizeof(struct report_log_lun), GFP_KERNEL);
+	internal_logdev_list = kmalloc(logdev_data_length + sizeof(struct report_log_lun), GFP_KERNEL);
 	if (!internal_logdev_list) {
 		kfree(*logdev_list);
 		*logdev_list = NULL;
@@ -1298,10 +1309,8 @@ static int pqi_get_device_lists(struct pqi_ctrl_info *ctrl_info,
 	}
 
 	memcpy(internal_logdev_list, logdev_data, logdev_data_length);
-	memset((u8 *)internal_logdev_list + logdev_data_length, 0,
-		sizeof(struct report_log_lun));
-	put_unaligned_be32(logdev_list_length +
-		sizeof(struct report_log_lun),
+	memset((u8 *)internal_logdev_list + logdev_data_length, 0, sizeof(struct report_log_lun));
+	put_unaligned_be32(logdev_list_length + sizeof(struct report_log_lun),
 		&internal_logdev_list->header.list_length);
 
 	kfree(*logdev_list);
@@ -1594,8 +1603,7 @@ static int pqi_get_physical_device_info(struct pqi_ctrl_info *ctrl_info,
 
 	memset(id_phys, 0, sizeof(*id_phys));
 
-	rc = pqi_identify_physical_device(ctrl_info, device,
-		id_phys, sizeof(*id_phys));
+	rc = pqi_identify_physical_device(ctrl_info, device, id_phys, sizeof(*id_phys));
 	if (rc) {
 		device->queue_depth = PQI_PHYSICAL_DISK_DEFAULT_MAX_QUEUE_DEPTH;
 		return rc;
@@ -1610,8 +1618,7 @@ static int pqi_get_physical_device_info(struct pqi_ctrl_info *ctrl_info,
 	device->box_index = id_phys->box_index;
 	device->phys_box_on_bus = id_phys->phys_box_on_bus;
 	device->phy_connected_dev_type = id_phys->phy_connected_dev_type[0];
-	device->queue_depth =
-		get_unaligned_le16(&id_phys->current_queue_depth_limit);
+	device->queue_depth = get_unaligned_le16(&id_phys->current_queue_depth_limit);
 	device->active_path_index = id_phys->active_path_number;
 	device->path_map = id_phys->redundant_path_present_map;
 	memcpy(&device->box,
@@ -1622,10 +1629,8 @@ static int pqi_get_physical_device_info(struct pqi_ctrl_info *ctrl_info,
 		sizeof(device->phys_connector));
 	device->bay = id_phys->phys_bay_in_box;
 	device->lun_count = id_phys->multi_lun_device_lun_count;
-	if ((id_phys->even_more_flags & PQI_DEVICE_PHY_MAP_SUPPORTED) &&
-		id_phys->phy_count)
-		device->phy_id =
-			id_phys->phy_to_phy_map[device->active_path_index];
+	if ((id_phys->even_more_flags & PQI_DEVICE_PHY_MAP_SUPPORTED) && id_phys->phy_count)
+		device->phy_id = id_phys->phy_to_phy_map[device->active_path_index];
 	else
 		device->phy_id = 0xFF;
 
@@ -1728,8 +1733,7 @@ static void pqi_show_volume_status(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_scsi_dev *device)
 {
 	char *status;
-	static const char unknown_state_str[] =
-		"Volume is in an unknown state (%u)";
+	static const char unknown_state_str[] = "Volume is in an unknown state (%u)";
 	char unknown_state_buffer[sizeof(unknown_state_str) + 10];
 
 	switch (device->volume_status) {
@@ -2107,6 +2111,15 @@ static inline bool pqi_is_device_added(struct pqi_scsi_dev *device)
 	return device->sdev != NULL;
 }
 
+static inline void pqi_init_device_tmf_work(struct pqi_scsi_dev *device)
+{
+	unsigned int lun;
+	struct pqi_tmf_work *tmf_work;
+
+	for (lun = 0, tmf_work = device->tmf_work; lun < PQI_MAX_LUNS_PER_DEVICE; lun++, tmf_work++)
+		INIT_WORK(&tmf_work->work_struct, pqi_tmf_worker);
+}
+
 static void pqi_update_device_list(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_scsi_dev *new_device_list[], unsigned int num_new_devices)
 {
@@ -2190,6 +2203,7 @@ static void pqi_update_device_list(struct pqi_ctrl_info *ctrl_info,
 		list_add_tail(&device->add_list_entry, &add_list);
 		/* To prevent this device structure from being freed later. */
 		device->keep_device = true;
+		pqi_init_device_tmf_work(device);
 	}
 
 	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
@@ -2254,7 +2268,6 @@ static void pqi_update_device_list(struct pqi_ctrl_info *ctrl_info,
 	}
 
 	ctrl_info->logical_volume_rescan_needed = false;
-
 }
 
 static inline bool pqi_is_supported_device(struct pqi_scsi_dev *device)
@@ -2367,14 +2380,12 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 		}
 	}
 
-	if (num_logicals &&
-		(logdev_list->header.flags & CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX))
+	if (num_logicals && (logdev_list->header.flags & CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX))
 		ctrl_info->lv_drive_type_mix_valid = true;
 
 	num_new_devices = num_physicals + num_logicals;
 
-	new_device_list = kmalloc(sizeof(*new_device_list) *
-		num_new_devices, GFP_KERNEL);
+	new_device_list = kmalloc(sizeof(*new_device_list) * num_new_devices, GFP_KERNEL);
 	if (!new_device_list) {
 		dev_warn(&ctrl_info->pci_dev->dev, "%s\n", out_of_memory_msg);
 		rc = -ENOMEM;
@@ -2384,13 +2395,11 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 	for (i = 0; i < num_new_devices; i++) {
 		device = kzalloc(sizeof(*device), GFP_KERNEL);
 		if (!device) {
-			dev_warn(&ctrl_info->pci_dev->dev, "%s\n",
-				out_of_memory_msg);
+			dev_warn(&ctrl_info->pci_dev->dev, "%s\n", out_of_memory_msg);
 			rc = -ENOMEM;
 			goto out;
 		}
-		list_add_tail(&device->new_device_list_entry,
-			&new_device_list_head);
+		list_add_tail(&device->new_device_list_entry, &new_device_list_head);
 	}
 
 	device = NULL;
@@ -2429,8 +2438,7 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 			if (device->device_type == SA_DEVICE_TYPE_EXPANDER_SMP)
 				device->is_expander_smp_device = true;
 		} else {
-			device->is_external_raid_device =
-				pqi_is_external_raid_addr(scsi3addr);
+			device->is_external_raid_device = pqi_is_external_raid_addr(scsi3addr);
 		}
 
 		if (!pqi_is_supported_device(device))
@@ -2439,8 +2447,7 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 		/* Gather information about the device. */
 		rc = pqi_get_device_info(ctrl_info, device, id_phys);
 		if (rc == -ENOMEM) {
-			dev_warn(&ctrl_info->pci_dev->dev, "%s\n",
-				out_of_memory_msg);
+			dev_warn(&ctrl_info->pci_dev->dev, "%s\n", out_of_memory_msg);
 			goto out;
 		}
 		if (rc) {
@@ -2466,16 +2473,12 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 
 		if (device->is_physical_device) {
 			memcpy(device->wwid, phys_lun->wwid, sizeof(device->wwid));
-			if ((phys_lun->device_flags &
-				CISS_REPORT_PHYS_DEV_FLAG_AIO_ENABLED) &&
-				phys_lun->aio_handle) {
-					device->aio_enabled = true;
-					device->aio_handle =
-						phys_lun->aio_handle;
+			if ((phys_lun->device_flags & CISS_REPORT_PHYS_DEV_FLAG_AIO_ENABLED) && phys_lun->aio_handle) {
+				device->aio_enabled = true;
+				device->aio_handle = phys_lun->aio_handle;
 			}
 		} else {
-			memcpy(device->volume_id, log_lun->volume_id,
-				sizeof(device->volume_id));
+			memcpy(device->volume_id, log_lun->volume_id, sizeof(device->volume_id));
 		}
 
 		device->sas_address = get_unaligned_be64(&device->wwid[0]);
@@ -2486,8 +2489,7 @@ static int pqi_update_scsi_devices(struct pqi_ctrl_info *ctrl_info)
 	pqi_update_device_list(ctrl_info, new_device_list, num_valid_devices);
 
 out:
-	list_for_each_entry_safe(device, next, &new_device_list_head,
-		new_device_list_entry) {
+	list_for_each_entry_safe(device, next, &new_device_list_head, new_device_list_entry) {
 		if (device->keep_device)
 			continue;
 		list_del(&device->new_device_list_entry);
@@ -2623,8 +2625,7 @@ static inline void pqi_set_encryption_info(struct pqi_encryption_info *encryptio
 	if (volume_blk_size != 512)
 		first_block = (first_block * volume_blk_size) / 512;
 
-	encryption_info->data_encryption_key_index =
-		get_unaligned_le16(&raid_map->data_encryption_key_index);
+	encryption_info->data_encryption_key_index = get_unaligned_le16(&raid_map->data_encryption_key_index);
 	encryption_info->encrypt_tweak_lower = lower_32_bits(first_block);
 	encryption_info->encrypt_tweak_upper = upper_32_bits(first_block);
 }
@@ -2723,13 +2724,11 @@ static int pci_get_aio_common_raid_map_values(struct pqi_ctrl_info *ctrl_info,
 	rmd->last_block = rmd->first_block + rmd->block_cnt - 1;
 
 	/* Check for invalid block or wraparound. */
-	if (rmd->last_block >=
-		get_unaligned_le64(&raid_map->volume_blk_cnt) ||
+	if (rmd->last_block >= get_unaligned_le64(&raid_map->volume_blk_cnt) ||
 		rmd->last_block < rmd->first_block)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
-	rmd->data_disks_per_row =
-		get_unaligned_le16(&raid_map->data_disks_per_row);
+	rmd->data_disks_per_row = get_unaligned_le16(&raid_map->data_disks_per_row);
 	rmd->strip_size = get_unaligned_le16(&raid_map->strip_size);
 	rmd->layout_map_count = get_unaligned_le16(&raid_map->layout_map_count);
 
@@ -2737,26 +2736,21 @@ static int pci_get_aio_common_raid_map_values(struct pqi_ctrl_info *ctrl_info,
 	rmd->blocks_per_row = rmd->data_disks_per_row * rmd->strip_size;
 	rmd->first_row = rmd->first_block / rmd->blocks_per_row;
 	rmd->last_row = rmd->last_block / rmd->blocks_per_row;
-	rmd->first_row_offset = (u32)(rmd->first_block -
-		(rmd->first_row * rmd->blocks_per_row));
-	rmd->last_row_offset = (u32)(rmd->last_block - (rmd->last_row *
-		rmd->blocks_per_row));
+	rmd->first_row_offset = (u32)(rmd->first_block - (rmd->first_row * rmd->blocks_per_row));
+	rmd->last_row_offset = (u32)(rmd->last_block - (rmd->last_row * rmd->blocks_per_row));
 	rmd->first_column = rmd->first_row_offset / rmd->strip_size;
 	rmd->last_column = rmd->last_row_offset / rmd->strip_size;
 
 	/* If this isn't a single row/column then give to the controller. */
-	if (rmd->first_row != rmd->last_row ||
-		rmd->first_column != rmd->last_column)
+	if (rmd->first_row != rmd->last_row || rmd->first_column != rmd->last_column)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
 	/* Proceeding with driver mapping. */
 	rmd->total_disks_per_row = rmd->data_disks_per_row +
 		get_unaligned_le16(&raid_map->metadata_disks_per_row);
-	rmd->map_row = ((u32)(rmd->first_row >>
-		raid_map->parity_rotation_shift)) %
+	rmd->map_row = ((u32)(rmd->first_row >> raid_map->parity_rotation_shift)) %
 		get_unaligned_le16(&raid_map->row_cnt);
-	rmd->map_index = (rmd->map_row * rmd->total_disks_per_row) +
-		rmd->first_column;
+	rmd->map_index = (rmd->map_row * rmd->total_disks_per_row) + rmd->first_column;
 
 	return 0;
 }
@@ -2767,44 +2761,35 @@ static int pqi_calc_aio_r5_or_r6(struct pqi_scsi_dev_raid_map_data *rmd,
 	/* RAID 50/60 */
 	/* Verify first and last block are in same RAID group. */
 	rmd->stripesize = rmd->blocks_per_row * rmd->layout_map_count;
-	rmd->first_group = (rmd->first_block %
-		rmd->stripesize) / rmd->blocks_per_row;
-	rmd->last_group = (rmd->last_block %
-		rmd->stripesize) / rmd->blocks_per_row;
+	rmd->first_group = (rmd->first_block % rmd->stripesize) / rmd->blocks_per_row;
+	rmd->last_group = (rmd->last_block % rmd->stripesize) / rmd->blocks_per_row;
 	if (rmd->first_group != rmd->last_group)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
 	/* Verify request is in a single row of RAID 5/6. */
-	rmd->first_row = rmd->r5or6_first_row =
-		rmd->first_block / rmd->stripesize;
+	rmd->first_row = rmd->r5or6_first_row = rmd->first_block / rmd->stripesize;
 	rmd->r5or6_last_row = rmd->last_block / rmd->stripesize;
 	if (rmd->r5or6_first_row != rmd->r5or6_last_row)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
 	/* Verify request is in a single column. */
 	rmd->first_row_offset = rmd->r5or6_first_row_offset =
-		(u32)((rmd->first_block % rmd->stripesize) %
-		rmd->blocks_per_row);
+		(u32)((rmd->first_block % rmd->stripesize) % rmd->blocks_per_row);
 
 	rmd->r5or6_last_row_offset =
-		(u32)((rmd->last_block % rmd->stripesize) %
-		rmd->blocks_per_row);
+		(u32)((rmd->last_block % rmd->stripesize) % rmd->blocks_per_row);
 
-	rmd->first_column =
-		rmd->r5or6_first_row_offset / rmd->strip_size;
+	rmd->first_column = rmd->r5or6_first_row_offset / rmd->strip_size;
 	rmd->r5or6_first_column = rmd->first_column;
 	rmd->r5or6_last_column = rmd->r5or6_last_row_offset / rmd->strip_size;
 	if (rmd->r5or6_first_column != rmd->r5or6_last_column)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
 	/* Request is eligible. */
-	rmd->map_row =
-		((u32)(rmd->first_row >> raid_map->parity_rotation_shift)) %
+	rmd->map_row = ((u32)(rmd->first_row >> raid_map->parity_rotation_shift)) %
 		get_unaligned_le16(&raid_map->row_cnt);
 
-	rmd->map_index = (rmd->first_group *
-		(get_unaligned_le16(&raid_map->row_cnt) *
-		rmd->total_disks_per_row)) +
+	rmd->map_index = (rmd->first_group * (get_unaligned_le16(&raid_map->row_cnt) * rmd->total_disks_per_row)) +
 		(rmd->map_row * rmd->total_disks_per_row) + rmd->first_column;
 
 	if (rmd->is_write) {
@@ -2908,8 +2893,7 @@ static int pqi_raid_bypass_submit_scsi_cmd(struct pqi_ctrl_info *ctrl_info,
 	if (rc)
 		return PQI_RAID_BYPASS_INELIGIBLE;
 
-	if (device->raid_level == SA_RAID_1 ||
-		device->raid_level == SA_RAID_TRIPLE) {
+	if (device->raid_level == SA_RAID_1 || device->raid_level == SA_RAID_TRIPLE) {
 		if (rmd.is_write) {
 			pqi_calc_aio_r1_nexus(raid_map, &rmd);
 		} else {
@@ -2920,8 +2904,7 @@ static int pqi_raid_bypass_submit_scsi_cmd(struct pqi_ctrl_info *ctrl_info,
 			device->next_bypass_group[rmd.map_index] = next_bypass_group;
 			rmd.map_index += group * rmd.data_disks_per_row;
 		}
-	} else if ((device->raid_level == SA_RAID_5 ||
-		device->raid_level == SA_RAID_6) &&
+	} else if ((device->raid_level == SA_RAID_5 || device->raid_level == SA_RAID_6) &&
 		(rmd.layout_map_count > 1 || rmd.is_write)) {
 		rc = pqi_calc_aio_r5_or_r6(&rmd, raid_map);
 		if (rc)
@@ -3088,8 +3071,7 @@ static void pqi_process_raid_io_error(struct pqi_io_request *io_request)
 	case PQI_DATA_IN_OUT_GOOD:
 		break;
 	case PQI_DATA_IN_OUT_UNDERFLOW:
-		xfer_count =
-			get_unaligned_le32(&error_info->data_out_transferred);
+		xfer_count = get_unaligned_le32(&error_info->data_out_transferred);
 		residual_count = scsi_bufflen(scmd) - xfer_count;
 		scsi_set_resid(scmd, residual_count);
 		if (xfer_count < scmd->underflow)
@@ -3125,8 +3107,7 @@ static void pqi_process_raid_io_error(struct pqi_io_request *io_request)
 
 	sense_data_length = get_unaligned_le16(&error_info->sense_data_length);
 	if (sense_data_length == 0)
-		sense_data_length =
-			get_unaligned_le16(&error_info->response_data_length);
+		sense_data_length = get_unaligned_le16(&error_info->response_data_length);
 	if (sense_data_length) {
 		if (sense_data_length > sizeof(error_info->data))
 			sense_data_length = sizeof(error_info->data);
@@ -3143,8 +3124,7 @@ static void pqi_process_raid_io_error(struct pqi_io_request *io_request)
 
 		if (sense_data_length > SCSI_SENSE_BUFFERSIZE)
 			sense_data_length = SCSI_SENSE_BUFFERSIZE;
-		memcpy(scmd->sense_buffer, error_info->data,
-			sense_data_length);
+		memcpy(scmd->sense_buffer, error_info->data, sense_data_length);
 	}
 
 	scmd->result = scsi_status;
@@ -3181,8 +3161,7 @@ static void pqi_process_aio_io_error(struct pqi_io_request *io_request)
 			break;
 		case PQI_AIO_STATUS_UNDERRUN:
 			scsi_status = SAM_STAT_GOOD;
-			residual_count = get_unaligned_le32(
-						&error_info->residual_count);
+			residual_count = get_unaligned_le32(&error_info->residual_count);
 			scsi_set_resid(scmd, residual_count);
 			xfer_count = scsi_bufflen(scmd) - residual_count;
 			if (xfer_count < scmd->underflow)
@@ -3229,15 +3208,13 @@ static void pqi_process_aio_io_error(struct pqi_io_request *io_request)
 	}
 
 	if (error_info->data_present) {
-		sense_data_length =
-			get_unaligned_le16(&error_info->data_length);
+		sense_data_length = get_unaligned_le16(&error_info->data_length);
 		if (sense_data_length) {
 			if (sense_data_length > sizeof(error_info->data))
 				sense_data_length = sizeof(error_info->data);
 			if (sense_data_length > SCSI_SENSE_BUFFERSIZE)
 				sense_data_length = SCSI_SENSE_BUFFERSIZE;
-			memcpy(scmd->sense_buffer, error_info->data,
-				sense_data_length);
+			memcpy(scmd->sense_buffer, error_info->data, sense_data_length);
 		}
 	}
 
@@ -3274,7 +3251,7 @@ static int pqi_interpret_task_management_response(struct pqi_ctrl_info *ctrl_inf
 	case SOP_TMF_REJECTED:
 		rc = -EAGAIN;
 		break;
-	case SOP_RC_INCORRECT_LOGICAL_UNIT:
+	case SOP_TMF_INCORRECT_LOGICAL_UNIT:
 		rc = -ENODEV;
 		break;
 	default:
@@ -3320,8 +3297,7 @@ static int pqi_process_io_intr(struct pqi_ctrl_info *ctrl_info, struct pqi_queue
 			break;
 
 		num_responses++;
-		response = queue_group->oq_element_array +
-			(oq_ci * PQI_OPERATIONAL_OQ_ELEMENT_LENGTH);
+		response = queue_group->oq_element_array + (oq_ci * PQI_OPERATIONAL_OQ_ELEMENT_LENGTH);
 
 		request_id = get_unaligned_le16(&response->request_id);
 		if (request_id >= ctrl_info->max_io_slots) {
@@ -3350,13 +3326,10 @@ static int pqi_process_io_intr(struct pqi_ctrl_info *ctrl_info, struct pqi_queue
 		case PQI_RESPONSE_IU_GENERAL_MANAGEMENT:
 			break;
 		case PQI_RESPONSE_IU_VENDOR_GENERAL:
-			io_request->status =
-				get_unaligned_le16(
-				&((struct pqi_vendor_general_response *)response)->status);
+			io_request->status = get_unaligned_le16(&((struct pqi_vendor_general_response *)response)->status);
 			break;
 		case PQI_RESPONSE_IU_TASK_MANAGEMENT:
-			io_request->status = pqi_interpret_task_management_response(ctrl_info,
-				(void *)response);
+			io_request->status = pqi_interpret_task_management_response(ctrl_info, (void *)response);
 			break;
 		case PQI_RESPONSE_IU_AIO_PATH_DISABLED:
 			pqi_aio_path_disabled(io_request);
@@ -3365,8 +3338,7 @@ static int pqi_process_io_intr(struct pqi_ctrl_info *ctrl_info, struct pqi_queue
 		case PQI_RESPONSE_IU_RAID_PATH_IO_ERROR:
 		case PQI_RESPONSE_IU_AIO_PATH_IO_ERROR:
 			io_request->error_info = ctrl_info->error_buffer +
-				(get_unaligned_le16(&response->error_index) *
-				PQI_ERROR_BUFFER_ELEMENT_LENGTH);
+				(get_unaligned_le16(&response->error_index) * PQI_ERROR_BUFFER_ELEMENT_LENGTH);
 			pqi_process_io_error(response->header.iu_type, io_request);
 			break;
 		default:
@@ -3425,12 +3397,10 @@ static void pqi_send_event_ack(struct pqi_ctrl_info *ctrl_info,
 		iq_pi = queue_group->iq_pi_copy[RAID_PATH];
 		iq_ci = readl(queue_group->iq_ci[RAID_PATH]);
 
-		if (pqi_num_elements_free(iq_pi, iq_ci,
-			ctrl_info->num_elements_per_iq))
+		if (pqi_num_elements_free(iq_pi, iq_ci, ctrl_info->num_elements_per_iq))
 			break;
 
-		spin_unlock_irqrestore(
-			&queue_group->submit_lock[RAID_PATH], flags);
+		spin_unlock_irqrestore(&queue_group->submit_lock[RAID_PATH], flags);
 
 		if (pqi_ctrl_offline(ctrl_info))
 			return;
@@ -3461,8 +3431,7 @@ static void pqi_acknowledge_event(struct pqi_ctrl_info *ctrl_info,
 	memset(&request, 0, sizeof(request));
 
 	request.header.iu_type = PQI_REQUEST_IU_ACKNOWLEDGE_VENDOR_EVENT;
-	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH, &request.header.iu_length);
 	request.event_type = event->event_type;
 	put_unaligned_le16(event->event_id, &request.event_id);
 	put_unaligned_le16(event->additional_event_id, &request.additional_event_id);
@@ -3528,7 +3497,7 @@ static void pqi_process_soft_reset(struct pqi_ctrl_info *ctrl_info)
 		ctrl_info->pqi_mode_enabled = false;
 		pqi_save_ctrl_mode(ctrl_info, SIS_MODE);
 		rc = pqi_ofa_ctrl_restart(ctrl_info, delay_secs);
-		pqi_ofa_free_host_buffer(ctrl_info);
+		pqi_host_free_buffer(ctrl_info, &ctrl_info->ofa_memory);
 		pqi_ctrl_ofa_done(ctrl_info);
 		dev_info(&ctrl_info->pci_dev->dev,
 			"Online Firmware Activation: %s\n",
@@ -3539,7 +3508,7 @@ static void pqi_process_soft_reset(struct pqi_ctrl_info *ctrl_info)
 			"Online Firmware Activation ABORTED\n");
 		if (ctrl_info->soft_reset_handshake_supported)
 			pqi_clear_soft_reset_status(ctrl_info);
-		pqi_ofa_free_host_buffer(ctrl_info);
+		pqi_host_free_buffer(ctrl_info, &ctrl_info->ofa_memory);
 		pqi_ctrl_ofa_done(ctrl_info);
 		pqi_ofa_ctrl_unquiesce(ctrl_info);
 		break;
@@ -3549,7 +3518,7 @@ static void pqi_process_soft_reset(struct pqi_ctrl_info *ctrl_info)
 		dev_err(&ctrl_info->pci_dev->dev,
 			"unexpected Online Firmware Activation reset status: 0x%x\n",
 			reset_status);
-		pqi_ofa_free_host_buffer(ctrl_info);
+		pqi_host_free_buffer(ctrl_info, &ctrl_info->ofa_memory);
 		pqi_ctrl_ofa_done(ctrl_info);
 		pqi_ofa_ctrl_unquiesce(ctrl_info);
 		pqi_take_ctrl_offline(ctrl_info, PQI_OFA_RESPONSE_TIMEOUT);
@@ -3564,8 +3533,8 @@ static void pqi_ofa_memory_alloc_worker(struct work_struct *work)
 	ctrl_info = container_of(work, struct pqi_ctrl_info, ofa_memory_alloc_work);
 
 	pqi_ctrl_ofa_start(ctrl_info);
-	pqi_ofa_setup_host_buffer(ctrl_info);
-	pqi_ofa_host_memory_update(ctrl_info);
+	pqi_host_setup_buffer(ctrl_info, &ctrl_info->ofa_memory, ctrl_info->ofa_bytes_requested, ctrl_info->ofa_bytes_requested);
+	pqi_host_memory_update(ctrl_info, &ctrl_info->ofa_memory, PQI_VENDOR_GENERAL_OFA_MEMORY_UPDATE);
 }
 
 static void pqi_ofa_quiesce_worker(struct work_struct *work)
@@ -3605,7 +3574,7 @@ static bool pqi_ofa_process_event(struct pqi_ctrl_info *ctrl_info,
 		dev_info(&ctrl_info->pci_dev->dev,
 			"received Online Firmware Activation cancel request: reason: %u\n",
 			ctrl_info->ofa_cancel_reason);
-		pqi_ofa_free_host_buffer(ctrl_info);
+		pqi_host_free_buffer(ctrl_info, &ctrl_info->ofa_memory);
 		pqi_ctrl_ofa_done(ctrl_info);
 		break;
 	default:
@@ -3708,8 +3677,7 @@ static void pqi_heartbeat_timer_handler(struct timer_list *t)
 	}
 
 	ctrl_info->previous_heartbeat_count = heartbeat_count;
-	mod_timer(&ctrl_info->heartbeat_timer,
-		jiffies + PQI_HEARTBEAT_TIMER_INTERVAL);
+	mod_timer(&ctrl_info->heartbeat_timer, jiffies + PQI_HEARTBEAT_TIMER_INTERVAL);
 }
 
 static void pqi_start_heartbeat_timer(struct pqi_ctrl_info *ctrl_info)
@@ -3717,13 +3685,10 @@ static void pqi_start_heartbeat_timer(struct pqi_ctrl_info *ctrl_info)
 	if (!ctrl_info->heartbeat_counter)
 		return;
 
-	ctrl_info->previous_num_interrupts =
-		atomic_read(&ctrl_info->num_interrupts);
-	ctrl_info->previous_heartbeat_count =
-		pqi_read_heartbeat_counter(ctrl_info);
+	ctrl_info->previous_num_interrupts = atomic_read(&ctrl_info->num_interrupts);
+	ctrl_info->previous_heartbeat_count = pqi_read_heartbeat_counter(ctrl_info);
 
-	ctrl_info->heartbeat_timer.expires =
-		jiffies + PQI_HEARTBEAT_TIMER_INTERVAL;
+	ctrl_info->heartbeat_timer.expires = jiffies + PQI_HEARTBEAT_TIMER_INTERVAL;
 	add_timer(&ctrl_info->heartbeat_timer);
 }
 
@@ -3737,12 +3702,10 @@ static void pqi_ofa_capture_event_payload(struct pqi_ctrl_info *ctrl_info,
 {
 	switch (event->event_id) {
 	case PQI_EVENT_OFA_MEMORY_ALLOCATION:
-		ctrl_info->ofa_bytes_requested =
-			get_unaligned_le32(&response->data.ofa_memory_allocation.bytes_requested);
+		ctrl_info->ofa_bytes_requested = get_unaligned_le32(&response->data.ofa_memory_allocation.bytes_requested);
 		break;
 	case PQI_EVENT_OFA_CANCELED:
-		ctrl_info->ofa_cancel_reason =
-			get_unaligned_le16(&response->data.ofa_cancelled.reason);
+		ctrl_info->ofa_cancel_reason = get_unaligned_le16(&response->data.ofa_cancelled.reason);
 		break;
 	}
 }
@@ -3784,8 +3747,7 @@ static int pqi_process_event_intr(struct pqi_ctrl_info *ctrl_info)
 			event->pending = true;
 			event->event_type = response->event_type;
 			event->event_id = get_unaligned_le16(&response->event_id);
-			event->additional_event_id =
-				get_unaligned_le32(&response->additional_event_id);
+			event->additional_event_id = get_unaligned_le32(&response->additional_event_id);
 			if (event->event_type == PQI_EVENT_TYPE_OFA)
 				pqi_ofa_capture_event_payload(ctrl_info, event, response);
 		}
@@ -3931,7 +3893,6 @@ out:
 	return IRQ_HANDLED;
 }
 
-
 static int pqi_request_irqs(struct pqi_ctrl_info *ctrl_info)
 {
 	struct pci_dev *pci_dev;
@@ -4014,12 +3975,8 @@ static int pqi_alloc_operational_queues(struct pqi_ctrl_info *ctrl_info)
 	unsigned int num_queue_indexes;
 	struct pqi_queue_group *queue_group;
 
-	element_array_length_per_iq =
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH *
-		ctrl_info->num_elements_per_iq;
-	element_array_length_per_oq =
-		PQI_OPERATIONAL_OQ_ELEMENT_LENGTH *
-		ctrl_info->num_elements_per_oq;
+	element_array_length_per_iq = PQI_OPERATIONAL_IQ_ELEMENT_LENGTH * ctrl_info->num_elements_per_iq;
+	element_array_length_per_oq = PQI_OPERATIONAL_OQ_ELEMENT_LENGTH * ctrl_info->num_elements_per_oq;
 	num_inbound_queues = ctrl_info->num_queue_groups * 2;
 	num_outbound_queues = ctrl_info->num_queue_groups;
 	num_queue_indexes = (ctrl_info->num_queue_groups * 3) + 1;
@@ -4027,30 +3984,24 @@ static int pqi_alloc_operational_queues(struct pqi_ctrl_info *ctrl_info)
 	aligned_pointer = NULL;
 
 	for (i = 0; i < num_inbound_queues; i++) {
-		aligned_pointer = PTR_ALIGN(aligned_pointer,
-			PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+		aligned_pointer = PTR_ALIGN(aligned_pointer, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 		aligned_pointer += element_array_length_per_iq;
 	}
 
 	for (i = 0; i < num_outbound_queues; i++) {
-		aligned_pointer = PTR_ALIGN(aligned_pointer,
-			PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+		aligned_pointer = PTR_ALIGN(aligned_pointer, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 		aligned_pointer += element_array_length_per_oq;
 	}
 
-	aligned_pointer = PTR_ALIGN(aligned_pointer,
-		PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
-	aligned_pointer += PQI_NUM_EVENT_QUEUE_ELEMENTS *
-		PQI_EVENT_OQ_ELEMENT_LENGTH;
+	aligned_pointer = PTR_ALIGN(aligned_pointer, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+	aligned_pointer += PQI_NUM_EVENT_QUEUE_ELEMENTS * PQI_EVENT_OQ_ELEMENT_LENGTH;
 
 	for (i = 0; i < num_queue_indexes; i++) {
-		aligned_pointer = PTR_ALIGN(aligned_pointer,
-			PQI_OPERATIONAL_INDEX_ALIGNMENT);
+		aligned_pointer = PTR_ALIGN(aligned_pointer, PQI_OPERATIONAL_INDEX_ALIGNMENT);
 		aligned_pointer += sizeof(pqi_index_t);
 	}
 
-	alloc_length = (size_t)aligned_pointer +
-		PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT;
+	alloc_length = (size_t)aligned_pointer + PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT;
 
 	alloc_length += PQI_EXTRA_SGL_MEMORY;
 
@@ -4064,8 +4015,7 @@ static int pqi_alloc_operational_queues(struct pqi_ctrl_info *ctrl_info)
 
 	ctrl_info->queue_memory_length = alloc_length;
 
-	element_array = PTR_ALIGN(ctrl_info->queue_memory_base,
-		PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+	element_array = PTR_ALIGN(ctrl_info->queue_memory_base, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 
 	for (i = 0; i < ctrl_info->num_queue_groups; i++) {
 		queue_group = &ctrl_info->queue_groups[i];
@@ -4074,71 +4024,52 @@ static int pqi_alloc_operational_queues(struct pqi_ctrl_info *ctrl_info)
 			ctrl_info->queue_memory_base_dma_handle +
 				(element_array - ctrl_info->queue_memory_base);
 		element_array += element_array_length_per_iq;
-		element_array = PTR_ALIGN(element_array,
-			PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+		element_array = PTR_ALIGN(element_array, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 		queue_group->iq_element_array[AIO_PATH] = element_array;
-		queue_group->iq_element_array_bus_addr[AIO_PATH] =
-			ctrl_info->queue_memory_base_dma_handle +
+		queue_group->iq_element_array_bus_addr[AIO_PATH] = ctrl_info->queue_memory_base_dma_handle +
 			(element_array - ctrl_info->queue_memory_base);
 		element_array += element_array_length_per_iq;
-		element_array = PTR_ALIGN(element_array,
-			PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+		element_array = PTR_ALIGN(element_array, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 	}
 
 	for (i = 0; i < ctrl_info->num_queue_groups; i++) {
 		queue_group = &ctrl_info->queue_groups[i];
 		queue_group->oq_element_array = element_array;
-		queue_group->oq_element_array_bus_addr =
-			ctrl_info->queue_memory_base_dma_handle +
+		queue_group->oq_element_array_bus_addr = ctrl_info->queue_memory_base_dma_handle +
 			(element_array - ctrl_info->queue_memory_base);
 		element_array += element_array_length_per_oq;
-		element_array = PTR_ALIGN(element_array,
-			PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+		element_array = PTR_ALIGN(element_array, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
 	}
 
 	ctrl_info->event_queue.oq_element_array = element_array;
-	ctrl_info->event_queue.oq_element_array_bus_addr =
-		ctrl_info->queue_memory_base_dma_handle +
+	ctrl_info->event_queue.oq_element_array_bus_addr = ctrl_info->queue_memory_base_dma_handle +
 		(element_array - ctrl_info->queue_memory_base);
-	element_array += PQI_NUM_EVENT_QUEUE_ELEMENTS *
-		PQI_EVENT_OQ_ELEMENT_LENGTH;
+	element_array += PQI_NUM_EVENT_QUEUE_ELEMENTS * PQI_EVENT_OQ_ELEMENT_LENGTH;
 
-	next_queue_index = (void __iomem *)PTR_ALIGN(element_array,
-		PQI_OPERATIONAL_INDEX_ALIGNMENT);
+	next_queue_index = (void __iomem *)PTR_ALIGN(element_array, PQI_OPERATIONAL_INDEX_ALIGNMENT);
 
 	for (i = 0; i < ctrl_info->num_queue_groups; i++) {
 		queue_group = &ctrl_info->queue_groups[i];
 		queue_group->iq_ci[RAID_PATH] = next_queue_index;
-		queue_group->iq_ci_bus_addr[RAID_PATH] =
-			ctrl_info->queue_memory_base_dma_handle +
-			(next_queue_index -
-			(void __iomem *)ctrl_info->queue_memory_base);
+		queue_group->iq_ci_bus_addr[RAID_PATH] = ctrl_info->queue_memory_base_dma_handle +
+			(next_queue_index - (void __iomem *)ctrl_info->queue_memory_base);
 		next_queue_index += sizeof(pqi_index_t);
-		next_queue_index = PTR_ALIGN(next_queue_index,
-			PQI_OPERATIONAL_INDEX_ALIGNMENT);
+		next_queue_index = PTR_ALIGN(next_queue_index, PQI_OPERATIONAL_INDEX_ALIGNMENT);
 		queue_group->iq_ci[AIO_PATH] = next_queue_index;
-		queue_group->iq_ci_bus_addr[AIO_PATH] =
-			ctrl_info->queue_memory_base_dma_handle +
-			(next_queue_index -
-			(void __iomem *)ctrl_info->queue_memory_base);
+		queue_group->iq_ci_bus_addr[AIO_PATH] = ctrl_info->queue_memory_base_dma_handle +
+			(next_queue_index - (void __iomem *)ctrl_info->queue_memory_base);
 		next_queue_index += sizeof(pqi_index_t);
-		next_queue_index = PTR_ALIGN(next_queue_index,
-			PQI_OPERATIONAL_INDEX_ALIGNMENT);
+		next_queue_index = PTR_ALIGN(next_queue_index, PQI_OPERATIONAL_INDEX_ALIGNMENT);
 		queue_group->oq_pi = next_queue_index;
-		queue_group->oq_pi_bus_addr =
-			ctrl_info->queue_memory_base_dma_handle +
-			(next_queue_index -
-			(void __iomem *)ctrl_info->queue_memory_base);
+		queue_group->oq_pi_bus_addr = ctrl_info->queue_memory_base_dma_handle +
+			(next_queue_index - (void __iomem *)ctrl_info->queue_memory_base);
 		next_queue_index += sizeof(pqi_index_t);
-		next_queue_index = PTR_ALIGN(next_queue_index,
-			PQI_OPERATIONAL_INDEX_ALIGNMENT);
+		next_queue_index = PTR_ALIGN(next_queue_index, PQI_OPERATIONAL_INDEX_ALIGNMENT);
 	}
 
 	ctrl_info->event_queue.oq_pi = next_queue_index;
-	ctrl_info->event_queue.oq_pi_bus_addr =
-		ctrl_info->queue_memory_base_dma_handle +
-		(next_queue_index -
-		(void __iomem *)ctrl_info->queue_memory_base);
+	ctrl_info->event_queue.oq_pi_bus_addr = ctrl_info->queue_memory_base_dma_handle +
+		(next_queue_index - (void __iomem *)ctrl_info->queue_memory_base);
 
 	return 0;
 }
@@ -4190,8 +4121,7 @@ static int pqi_alloc_admin_queues(struct pqi_ctrl_info *ctrl_info)
 	struct pqi_admin_queues_aligned *admin_queues_aligned;
 	struct pqi_admin_queues *admin_queues;
 
-	alloc_length = sizeof(struct pqi_admin_queues_aligned) +
-		PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT;
+	alloc_length = sizeof(struct pqi_admin_queues_aligned) + PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT;
 
 	ctrl_info->admin_queue_memory_base =
 		dma_zalloc_coherent(&ctrl_info->pci_dev->dev,
@@ -4205,32 +4135,20 @@ static int pqi_alloc_admin_queues(struct pqi_ctrl_info *ctrl_info)
 	ctrl_info->admin_queue_memory_length = alloc_length;
 
 	admin_queues = &ctrl_info->admin_queues;
-	admin_queues_aligned = PTR_ALIGN(ctrl_info->admin_queue_memory_base,
-		PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
-	admin_queues->iq_element_array =
-		&admin_queues_aligned->iq_element_array;
-	admin_queues->oq_element_array =
-		&admin_queues_aligned->oq_element_array;
+	admin_queues_aligned = PTR_ALIGN(ctrl_info->admin_queue_memory_base, PQI_QUEUE_ELEMENT_ARRAY_ALIGNMENT);
+	admin_queues->iq_element_array = &admin_queues_aligned->iq_element_array;
+	admin_queues->oq_element_array = &admin_queues_aligned->oq_element_array;
 	admin_queues->iq_ci = &admin_queues_aligned->iq_ci;
-	admin_queues->oq_pi =
-		(pqi_index_t __iomem *)&admin_queues_aligned->oq_pi;
+	admin_queues->oq_pi = (pqi_index_t __iomem *)&admin_queues_aligned->oq_pi;
 
-	admin_queues->iq_element_array_bus_addr =
-		ctrl_info->admin_queue_memory_base_dma_handle +
-		(admin_queues->iq_element_array -
-		ctrl_info->admin_queue_memory_base);
-	admin_queues->oq_element_array_bus_addr =
-		ctrl_info->admin_queue_memory_base_dma_handle +
-		(admin_queues->oq_element_array -
-		ctrl_info->admin_queue_memory_base);
-	admin_queues->iq_ci_bus_addr =
-		ctrl_info->admin_queue_memory_base_dma_handle +
-		((void *)admin_queues->iq_ci -
-		ctrl_info->admin_queue_memory_base);
-	admin_queues->oq_pi_bus_addr =
-		ctrl_info->admin_queue_memory_base_dma_handle +
-		((void __iomem *)admin_queues->oq_pi -
-		(void __iomem *)ctrl_info->admin_queue_memory_base);
+	admin_queues->iq_element_array_bus_addr = ctrl_info->admin_queue_memory_base_dma_handle +
+		(admin_queues->iq_element_array - ctrl_info->admin_queue_memory_base);
+	admin_queues->oq_element_array_bus_addr = ctrl_info->admin_queue_memory_base_dma_handle +
+		(admin_queues->oq_element_array - ctrl_info->admin_queue_memory_base);
+	admin_queues->iq_ci_bus_addr = ctrl_info->admin_queue_memory_base_dma_handle +
+		((void *)admin_queues->iq_ci - ctrl_info->admin_queue_memory_base);
+	admin_queues->oq_pi_bus_addr = ctrl_info->admin_queue_memory_base_dma_handle +
+		((void __iomem *)admin_queues->oq_pi - (void __iomem *)ctrl_info->admin_queue_memory_base);
 
 	return 0;
 }
@@ -4249,22 +4167,15 @@ static int pqi_create_admin_queues(struct pqi_ctrl_info *ctrl_info)
 	pqi_registers = ctrl_info->pqi_registers;
 	admin_queues = &ctrl_info->admin_queues;
 
-	writeq((u64)admin_queues->iq_element_array_bus_addr,
-		&pqi_registers->admin_iq_element_array_addr);
-	writeq((u64)admin_queues->oq_element_array_bus_addr,
-		&pqi_registers->admin_oq_element_array_addr);
-	writeq((u64)admin_queues->iq_ci_bus_addr,
-		&pqi_registers->admin_iq_ci_addr);
-	writeq((u64)admin_queues->oq_pi_bus_addr,
-		&pqi_registers->admin_oq_pi_addr);
+	writeq((u64)admin_queues->iq_element_array_bus_addr, &pqi_registers->admin_iq_element_array_addr);
+	writeq((u64)admin_queues->oq_element_array_bus_addr, &pqi_registers->admin_oq_element_array_addr);
+	writeq((u64)admin_queues->iq_ci_bus_addr, &pqi_registers->admin_iq_ci_addr);
+	writeq((u64)admin_queues->oq_pi_bus_addr, &pqi_registers->admin_oq_pi_addr);
 
-	reg = PQI_ADMIN_IQ_NUM_ELEMENTS |
-		(PQI_ADMIN_OQ_NUM_ELEMENTS << 8) |
-		(admin_queues->int_msg_num << 16);
+	reg = PQI_ADMIN_IQ_NUM_ELEMENTS | (PQI_ADMIN_OQ_NUM_ELEMENTS << 8) | (admin_queues->int_msg_num << 16);
 	writel(reg, &pqi_registers->admin_iq_num_elements);
 
-	writel(PQI_CREATE_ADMIN_QUEUE_PAIR,
-		&pqi_registers->function_and_status_code);
+	writel(PQI_CREATE_ADMIN_QUEUE_PAIR, &pqi_registers->function_and_status_code);
 
 	timeout = PQI_ADMIN_QUEUE_CREATE_TIMEOUT_JIFFIES + jiffies;
 	while (1) {
@@ -4281,11 +4192,9 @@ static int pqi_create_admin_queues(struct pqi_ctrl_info *ctrl_info)
 	 * offsets until *after* the create admin queue pair command
 	 * completes successfully.
 	 */
-	admin_queues->iq_pi = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
+	admin_queues->iq_pi = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
 		readq(&pqi_registers->admin_iq_pi_offset);
-	admin_queues->oq_ci = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
+	admin_queues->oq_ci = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
 		readq(&pqi_registers->admin_oq_ci_offset);
 
 	return 0;
@@ -4380,45 +4289,35 @@ static void pqi_start_io(struct pqi_ctrl_info *ctrl_info,
 
 	iq_pi = queue_group->iq_pi_copy[path];
 
-	list_for_each_entry_safe(io_request, next,
-		&queue_group->request_list[path], request_list_entry) {
-
+	list_for_each_entry_safe(io_request, next, &queue_group->request_list[path], request_list_entry) {
 		request = io_request->iu;
 
-		iu_length = get_unaligned_le16(&request->iu_length) +
-			PQI_REQUEST_HEADER_LENGTH;
-		num_elements_needed =
-			DIV_ROUND_UP(iu_length,
-				PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
+		iu_length = get_unaligned_le16(&request->iu_length) + PQI_REQUEST_HEADER_LENGTH;
+		num_elements_needed = DIV_ROUND_UP(iu_length, PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
 
 		iq_ci = readl(queue_group->iq_ci[path]);
 
-		if (num_elements_needed > pqi_num_elements_free(iq_pi, iq_ci,
-			ctrl_info->num_elements_per_iq))
+		if (num_elements_needed > pqi_num_elements_free(iq_pi, iq_ci, ctrl_info->num_elements_per_iq))
 			break;
 
-		put_unaligned_le16(queue_group->oq_id,
-			&request->response_queue_id);
+		put_unaligned_le16(queue_group->oq_id, &request->response_queue_id);
 
 		next_element = queue_group->iq_element_array[path] +
 			(iq_pi * PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
 
-		num_elements_to_end_of_queue =
-			ctrl_info->num_elements_per_iq - iq_pi;
+		num_elements_to_end_of_queue = ctrl_info->num_elements_per_iq - iq_pi;
 
 		if (num_elements_needed <= num_elements_to_end_of_queue) {
 			memcpy(next_element, request, iu_length);
 		} else {
-			copy_count = num_elements_to_end_of_queue *
-				PQI_OPERATIONAL_IQ_ELEMENT_LENGTH;
+			copy_count = num_elements_to_end_of_queue * PQI_OPERATIONAL_IQ_ELEMENT_LENGTH;
 			memcpy(next_element, request, copy_count);
 			memcpy(queue_group->iq_element_array[path],
 				(u8 *)request + copy_count,
 				iu_length - copy_count);
 		}
 
-		iq_pi = (iq_pi + num_elements_needed) %
-			ctrl_info->num_elements_per_iq;
+		iq_pi = (iq_pi + num_elements_needed) % ctrl_info->num_elements_per_iq;
 
 		list_del(&io_request->request_list_entry);
 	}
@@ -4478,8 +4377,7 @@ static int pqi_process_raid_io_error_synchronous(
 			rc = 0;
 		break;
 	case PQI_DATA_IN_OUT_UNDERFLOW:
-		if (error_info->status == SAM_STAT_GOOD ||
-			error_info->status == SAM_STAT_CHECK_CONDITION)
+		if (error_info->status == SAM_STAT_GOOD || error_info->status == SAM_STAT_CHECK_CONDITION)
 			rc = 0;
 		break;
 	case PQI_DATA_IN_OUT_ABORTED:
@@ -4512,9 +4410,10 @@ static int pqi_submit_raid_request_synchronous(struct pqi_ctrl_info *ctrl_info,
 	}
 
 	pqi_ctrl_busy(ctrl_info);
+
 	/*
-	 * Wait for other admin queue updates such as:
-	 * config table changes, OFA memory updates, ...
+	 * Wait for other admin queue updates such as
+	 * config table changes, OFA memory updates, etc.
 	 */
 	if (pqi_is_blockable_request(request))
 		pqi_wait_if_ctrl_blocked(ctrl_info);
@@ -4526,22 +4425,19 @@ static int pqi_submit_raid_request_synchronous(struct pqi_ctrl_info *ctrl_info,
 
 	io_request = pqi_alloc_io_request(ctrl_info, NULL);
 
-	put_unaligned_le16(io_request->index,
-		&(((struct pqi_raid_path_request *)request)->request_id));
+	put_unaligned_le16(io_request->index, &(((struct pqi_raid_path_request *)request)->request_id));
 
 	if (request->iu_type == PQI_REQUEST_IU_RAID_PATH_IO)
 		((struct pqi_raid_path_request *)request)->error_index =
 			((struct pqi_raid_path_request *)request)->request_id;
 
-	iu_length = get_unaligned_le16(&request->iu_length) +
-		PQI_REQUEST_HEADER_LENGTH;
+	iu_length = get_unaligned_le16(&request->iu_length) + PQI_REQUEST_HEADER_LENGTH;
 	memcpy(io_request->iu, request, iu_length);
 
 	io_request->io_complete_callback = pqi_raid_synchronous_complete;
 	io_request->context = &wait;
 
-	pqi_start_io(ctrl_info, &ctrl_info->queue_groups[PQI_DEFAULT_QUEUE_GROUP], RAID_PATH,
-		io_request);
+	pqi_start_io(ctrl_info, &ctrl_info->queue_groups[PQI_DEFAULT_QUEUE_GROUP], RAID_PATH, io_request);
 
 	pqi_wait_for_completion_io(ctrl_info, &wait);
 
@@ -4563,14 +4459,13 @@ out:
 	return rc;
 }
 
-static int pqi_validate_admin_response(
-	struct pqi_general_admin_response *response, u8 expected_function_code)
+static int pqi_validate_admin_response(struct pqi_general_admin_response *response,
+	u8 expected_function_code)
 {
 	if (response->header.iu_type != PQI_RESPONSE_IU_GENERAL_ADMIN)
 		return -EINVAL;
 
-	if (get_unaligned_le16(&response->header.iu_length) !=
-		PQI_GENERAL_ADMIN_IU_LENGTH)
+	if (get_unaligned_le16(&response->header.iu_length) != PQI_GENERAL_ADMIN_IU_LENGTH)
 		return -EINVAL;
 
 	if (response->function_code != expected_function_code)
@@ -4582,10 +4477,8 @@ static int pqi_validate_admin_response(
 	return 0;
 }
 
-static int pqi_submit_admin_request_synchronous(
-	struct pqi_ctrl_info *ctrl_info,
-	struct pqi_general_admin_request *request,
-	struct pqi_general_admin_response *response)
+static int pqi_submit_admin_request_synchronous(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_general_admin_request *request, struct pqi_general_admin_response *response)
 {
 	int rc;
 
@@ -4614,17 +4507,13 @@ static int pqi_report_device_capability(struct pqi_ctrl_info *ctrl_info)
 	memset(&request, 0, sizeof(request));
 
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
-	request.function_code =
-		PQI_GENERAL_ADMIN_FUNCTION_REPORT_DEVICE_CAPABILITY;
-	put_unaligned_le32(sizeof(*capability),
-		&request.data.report_device_capability.buffer_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
+	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_REPORT_DEVICE_CAPABILITY;
+	put_unaligned_le32(sizeof(*capability), &request.data.report_device_capability.buffer_length);
 
 	rc = pqi_map_single(ctrl_info->pci_dev,
 		&request.data.report_device_capability.sg_descriptor,
-		capability, sizeof(*capability),
-		DMA_FROM_DEVICE);
+		capability, sizeof(*capability), DMA_FROM_DEVICE);
 	if (rc)
 		goto out;
 
@@ -4642,31 +4531,18 @@ static int pqi_report_device_capability(struct pqi_ctrl_info *ctrl_info)
 		goto out;
 	}
 
-	ctrl_info->max_inbound_queues =
-		get_unaligned_le16(&capability->max_inbound_queues);
-	ctrl_info->max_elements_per_iq =
-		get_unaligned_le16(&capability->max_elements_per_iq);
-	ctrl_info->max_iq_element_length =
-		get_unaligned_le16(&capability->max_iq_element_length)
-		* 16;
-	ctrl_info->max_outbound_queues =
-		get_unaligned_le16(&capability->max_outbound_queues);
-	ctrl_info->max_elements_per_oq =
-		get_unaligned_le16(&capability->max_elements_per_oq);
-	ctrl_info->max_oq_element_length =
-		get_unaligned_le16(&capability->max_oq_element_length)
-		* 16;
+	ctrl_info->max_inbound_queues = get_unaligned_le16(&capability->max_inbound_queues);
+	ctrl_info->max_elements_per_iq = get_unaligned_le16(&capability->max_elements_per_iq);
+	ctrl_info->max_iq_element_length = get_unaligned_le16(&capability->max_iq_element_length) * 16;
+	ctrl_info->max_outbound_queues = get_unaligned_le16(&capability->max_outbound_queues);
+	ctrl_info->max_elements_per_oq = get_unaligned_le16(&capability->max_elements_per_oq);
+	ctrl_info->max_oq_element_length = get_unaligned_le16(&capability->max_oq_element_length) * 16;
 
-	sop_iu_layer_descriptor =
-		&capability->iu_layer_descriptors[PQI_PROTOCOL_SOP];
+	sop_iu_layer_descriptor = &capability->iu_layer_descriptors[PQI_PROTOCOL_SOP];
 
-	ctrl_info->max_inbound_iu_length_per_firmware =
-		get_unaligned_le16(
-			&sop_iu_layer_descriptor->max_inbound_iu_length);
-	ctrl_info->inbound_spanning_supported =
-		sop_iu_layer_descriptor->inbound_spanning_supported;
-	ctrl_info->outbound_spanning_supported =
-		sop_iu_layer_descriptor->outbound_spanning_supported;
+	ctrl_info->max_inbound_iu_length_per_firmware = get_unaligned_le16(&sop_iu_layer_descriptor->max_inbound_iu_length);
+	ctrl_info->inbound_spanning_supported = sop_iu_layer_descriptor->inbound_spanning_supported;
+	ctrl_info->outbound_spanning_supported = sop_iu_layer_descriptor->outbound_spanning_supported;
 
 out:
 	kfree(capability);
@@ -4676,8 +4552,7 @@ out:
 
 static int pqi_validate_device_capability(struct pqi_ctrl_info *ctrl_info)
 {
-	if (ctrl_info->max_iq_element_length <
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) {
+	if (ctrl_info->max_iq_element_length < PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) {
 		dev_err(&ctrl_info->pci_dev->dev,
 			"max. inbound queue element length of %d is less than the required length of %d\n",
 			ctrl_info->max_iq_element_length,
@@ -4685,8 +4560,7 @@ static int pqi_validate_device_capability(struct pqi_ctrl_info *ctrl_info)
 		return -EINVAL;
 	}
 
-	if (ctrl_info->max_oq_element_length <
-		PQI_OPERATIONAL_OQ_ELEMENT_LENGTH) {
+	if (ctrl_info->max_oq_element_length < PQI_OPERATIONAL_OQ_ELEMENT_LENGTH) {
 		dev_err(&ctrl_info->pci_dev->dev,
 			"max. outbound queue element length of %d is less than the required length of %d\n",
 			ctrl_info->max_oq_element_length,
@@ -4694,8 +4568,7 @@ static int pqi_validate_device_capability(struct pqi_ctrl_info *ctrl_info)
 		return -EINVAL;
 	}
 
-	if (ctrl_info->max_inbound_iu_length_per_firmware <
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) {
+	if (ctrl_info->max_inbound_iu_length_per_firmware < PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) {
 		dev_err(&ctrl_info->pci_dev->dev,
 			"max. inbound IU length of %u is less than the min. required length of %d\n",
 			ctrl_info->max_inbound_iu_length_per_firmware,
@@ -4733,31 +4606,22 @@ static int pqi_create_event_queue(struct pqi_ctrl_info *ctrl_info)
 	 */
 	memset(&request, 0, sizeof(request));
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
 	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_CREATE_OQ;
-	put_unaligned_le16(event_queue->oq_id,
-		&request.data.create_operational_oq.queue_id);
-	put_unaligned_le64((u64)event_queue->oq_element_array_bus_addr,
-		&request.data.create_operational_oq.element_array_addr);
-	put_unaligned_le64((u64)event_queue->oq_pi_bus_addr,
-		&request.data.create_operational_oq.pi_addr);
-	put_unaligned_le16(PQI_NUM_EVENT_QUEUE_ELEMENTS,
-		&request.data.create_operational_oq.num_elements);
-	put_unaligned_le16(PQI_EVENT_OQ_ELEMENT_LENGTH / 16,
-		&request.data.create_operational_oq.element_length);
+	put_unaligned_le16(event_queue->oq_id, &request.data.create_operational_oq.queue_id);
+	put_unaligned_le64((u64)event_queue->oq_element_array_bus_addr, &request.data.create_operational_oq.element_array_addr);
+	put_unaligned_le64((u64)event_queue->oq_pi_bus_addr, &request.data.create_operational_oq.pi_addr);
+	put_unaligned_le16(PQI_NUM_EVENT_QUEUE_ELEMENTS, &request.data.create_operational_oq.num_elements);
+	put_unaligned_le16(PQI_EVENT_OQ_ELEMENT_LENGTH / 16, &request.data.create_operational_oq.element_length);
 	request.data.create_operational_oq.queue_protocol = PQI_PROTOCOL_SOP;
-	put_unaligned_le16(event_queue->int_msg_num,
-		&request.data.create_operational_oq.int_msg_num);
+	put_unaligned_le16(event_queue->int_msg_num, &request.data.create_operational_oq.int_msg_num);
 
 	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request, &response);
 	if (rc)
 		return rc;
 
-	event_queue->oq_ci = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
-		get_unaligned_le64(
-			&response.data.create_operational_oq.oq_ci_offset);
+	event_queue->oq_ci = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
+		get_unaligned_le64(&response.data.create_operational_oq.oq_ci_offset);
 
 	return 0;
 }
@@ -4778,34 +4642,24 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 	 */
 	memset(&request, 0, sizeof(request));
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
 	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_CREATE_IQ;
-	put_unaligned_le16(queue_group->iq_id[RAID_PATH],
-		&request.data.create_operational_iq.queue_id);
-	put_unaligned_le64(
-		(u64)queue_group->iq_element_array_bus_addr[RAID_PATH],
-		&request.data.create_operational_iq.element_array_addr);
-	put_unaligned_le64((u64)queue_group->iq_ci_bus_addr[RAID_PATH],
-		&request.data.create_operational_iq.ci_addr);
-	put_unaligned_le16(ctrl_info->num_elements_per_iq,
-		&request.data.create_operational_iq.num_elements);
-	put_unaligned_le16(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH / 16,
-		&request.data.create_operational_iq.element_length);
+	put_unaligned_le16(queue_group->iq_id[RAID_PATH], &request.data.create_operational_iq.queue_id);
+	put_unaligned_le64((u64)queue_group->iq_element_array_bus_addr[RAID_PATH], &request.data.create_operational_iq.element_array_addr);
+	put_unaligned_le64((u64)queue_group->iq_ci_bus_addr[RAID_PATH], &request.data.create_operational_iq.ci_addr);
+	put_unaligned_le16(ctrl_info->num_elements_per_iq, &request.data.create_operational_iq.num_elements);
+	put_unaligned_le16(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH / 16, &request.data.create_operational_iq.element_length);
 	request.data.create_operational_iq.queue_protocol = PQI_PROTOCOL_SOP;
 
-	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request,
-		&response);
+	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request, &response);
 	if (rc) {
 		dev_err(&ctrl_info->pci_dev->dev,
 			"error creating inbound RAID queue\n");
 		return rc;
 	}
 
-	queue_group->iq_pi[RAID_PATH] = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
-		get_unaligned_le64(
-			&response.data.create_operational_iq.iq_pi_offset);
+	queue_group->iq_pi[RAID_PATH] = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
+		get_unaligned_le64(&response.data.create_operational_iq.iq_pi_offset);
 
 	/*
 	 * Create IQ (Inbound Queue - host to device queue) for
@@ -4813,20 +4667,13 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 	 */
 	memset(&request, 0, sizeof(request));
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
 	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_CREATE_IQ;
-	put_unaligned_le16(queue_group->iq_id[AIO_PATH],
-		&request.data.create_operational_iq.queue_id);
-	put_unaligned_le64((u64)queue_group->
-		iq_element_array_bus_addr[AIO_PATH],
-		&request.data.create_operational_iq.element_array_addr);
-	put_unaligned_le64((u64)queue_group->iq_ci_bus_addr[AIO_PATH],
-		&request.data.create_operational_iq.ci_addr);
-	put_unaligned_le16(ctrl_info->num_elements_per_iq,
-		&request.data.create_operational_iq.num_elements);
-	put_unaligned_le16(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH / 16,
-		&request.data.create_operational_iq.element_length);
+	put_unaligned_le16(queue_group->iq_id[AIO_PATH], &request.data.create_operational_iq.queue_id);
+	put_unaligned_le64((u64)queue_group->iq_element_array_bus_addr[AIO_PATH], &request.data.create_operational_iq.element_array_addr);
+	put_unaligned_le64((u64)queue_group->iq_ci_bus_addr[AIO_PATH], &request.data.create_operational_iq.ci_addr);
+	put_unaligned_le16(ctrl_info->num_elements_per_iq, &request.data.create_operational_iq.num_elements);
+	put_unaligned_le16(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH / 16, &request.data.create_operational_iq.element_length);
 	request.data.create_operational_iq.queue_protocol = PQI_PROTOCOL_SOP;
 
 	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request, &response);
@@ -4836,10 +4683,8 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 		return rc;
 	}
 
-	queue_group->iq_pi[AIO_PATH] = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
-		get_unaligned_le64(
-			&response.data.create_operational_iq.iq_pi_offset);
+	queue_group->iq_pi[AIO_PATH] = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
+		get_unaligned_le64(&response.data.create_operational_iq.iq_pi_offset);
 
 	/*
 	 * Designate the 2nd IQ as the AIO path.  By default, all IQs are
@@ -4848,13 +4693,10 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 	 */
 	memset(&request, 0, sizeof(request));
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
 	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_CHANGE_IQ_PROPERTY;
-	put_unaligned_le16(queue_group->iq_id[AIO_PATH],
-		&request.data.change_operational_iq_properties.queue_id);
-	put_unaligned_le32(PQI_IQ_PROPERTY_IS_AIO_QUEUE,
-		&request.data.change_operational_iq_properties.vendor_specific);
+	put_unaligned_le16(queue_group->iq_id[AIO_PATH], &request.data.change_operational_iq_properties.queue_id);
+	put_unaligned_le32(PQI_IQ_PROPERTY_IS_AIO_QUEUE, &request.data.change_operational_iq_properties.vendor_specific);
 
 	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request,
 		&response);
@@ -4869,22 +4711,15 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 	 */
 	memset(&request, 0, sizeof(request));
 	request.header.iu_type = PQI_REQUEST_IU_GENERAL_ADMIN;
-	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH,
-		&request.header.iu_length);
+	put_unaligned_le16(PQI_GENERAL_ADMIN_IU_LENGTH, &request.header.iu_length);
 	request.function_code = PQI_GENERAL_ADMIN_FUNCTION_CREATE_OQ;
-	put_unaligned_le16(queue_group->oq_id,
-		&request.data.create_operational_oq.queue_id);
-	put_unaligned_le64((u64)queue_group->oq_element_array_bus_addr,
-		&request.data.create_operational_oq.element_array_addr);
-	put_unaligned_le64((u64)queue_group->oq_pi_bus_addr,
-		&request.data.create_operational_oq.pi_addr);
-	put_unaligned_le16(ctrl_info->num_elements_per_oq,
-		&request.data.create_operational_oq.num_elements);
-	put_unaligned_le16(PQI_OPERATIONAL_OQ_ELEMENT_LENGTH / 16,
-		&request.data.create_operational_oq.element_length);
+	put_unaligned_le16(queue_group->oq_id, &request.data.create_operational_oq.queue_id);
+	put_unaligned_le64((u64)queue_group->oq_element_array_bus_addr, &request.data.create_operational_oq.element_array_addr);
+	put_unaligned_le64((u64)queue_group->oq_pi_bus_addr, &request.data.create_operational_oq.pi_addr);
+	put_unaligned_le16(ctrl_info->num_elements_per_oq, &request.data.create_operational_oq.num_elements);
+	put_unaligned_le16(PQI_OPERATIONAL_OQ_ELEMENT_LENGTH / 16, &request.data.create_operational_oq.element_length);
 	request.data.create_operational_oq.queue_protocol = PQI_PROTOCOL_SOP;
-	put_unaligned_le16(queue_group->int_msg_num,
-		&request.data.create_operational_oq.int_msg_num);
+	put_unaligned_le16(queue_group->int_msg_num, &request.data.create_operational_oq.int_msg_num);
 
 	rc = pqi_submit_admin_request_synchronous(ctrl_info, &request,
 		&response);
@@ -4894,10 +4729,8 @@ static int pqi_create_queue_group(struct pqi_ctrl_info *ctrl_info,
 		return rc;
 	}
 
-	queue_group->oq_ci = ctrl_info->iomem_base +
-		PQI_DEVICE_REGISTERS_OFFSET +
-		get_unaligned_le64(
-			&response.data.create_operational_oq.oq_ci_offset);
+	queue_group->oq_ci = ctrl_info->iomem_base + PQI_DEVICE_REGISTERS_OFFSET +
+		get_unaligned_le64(&response.data.create_operational_oq.oq_ci_offset);
 
 	return 0;
 }
@@ -4940,8 +4773,7 @@ static int pqi_configure_events(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_event_descriptor *event_descriptor;
 	struct pqi_general_management_request request;
 
-	event_config = kmalloc(PQI_REPORT_EVENT_CONFIG_BUFFER_LENGTH,
-		GFP_KERNEL);
+	event_config = kmalloc(PQI_REPORT_EVENT_CONFIG_BUFFER_LENGTH, GFP_KERNEL);
 	if (!event_config)
 		return -ENOMEM;
 
@@ -4972,10 +4804,8 @@ static int pqi_configure_events(struct pqi_ctrl_info *ctrl_info,
 
 	for (i = 0; i < event_config->num_event_descriptors; i++) {
 		event_descriptor = &event_config->descriptors[i];
-		if (enable_events &&
-			pqi_is_supported_event(event_descriptor->event_type))
-				put_unaligned_le16(ctrl_info->event_queue.oq_id,
-					&event_descriptor->oq_id);
+		if (enable_events && pqi_is_supported_event(event_descriptor->event_type))
+			put_unaligned_le16(ctrl_info->event_queue.oq_id, &event_descriptor->oq_id);
 		else
 			put_unaligned_le16(0, &event_descriptor->oq_id);
 	}
@@ -4986,8 +4816,7 @@ static int pqi_configure_events(struct pqi_ctrl_info *ctrl_info,
 	put_unaligned_le16(offsetof(struct pqi_general_management_request,
 		data.report_event_configuration.sg_descriptors[1]) -
 		PQI_REQUEST_HEADER_LENGTH, &request.header.iu_length);
-	put_unaligned_le32(PQI_REPORT_EVENT_CONFIG_BUFFER_LENGTH,
-		&request.data.report_event_configuration.buffer_length);
+	put_unaligned_le32(PQI_REPORT_EVENT_CONFIG_BUFFER_LENGTH, &request.data.report_event_configuration.buffer_length);
 
 	rc = pqi_map_single(ctrl_info->pci_dev,
 		request.data.report_event_configuration.sg_descriptors,
@@ -4998,9 +4827,7 @@ static int pqi_configure_events(struct pqi_ctrl_info *ctrl_info,
 
 	rc = pqi_submit_raid_request_synchronous(ctrl_info, &request.header, 0, NULL);
 
-	pqi_pci_unmap(ctrl_info->pci_dev,
-		request.data.report_event_configuration.sg_descriptors, 1,
-		DMA_TO_DEVICE);
+	pqi_pci_unmap(ctrl_info->pci_dev, request.data.report_event_configuration.sg_descriptors, 1, DMA_TO_DEVICE);
 
 out:
 	kfree(event_config);
@@ -5118,22 +4945,18 @@ static void pqi_calculate_io_resources(struct pqi_ctrl_info *ctrl_info)
 	u32 max_transfer_size;
 	u32 max_sg_entries;
 
-	ctrl_info->scsi_ml_can_queue =
-		ctrl_info->max_outstanding_requests - PQI_RESERVED_IO_SLOTS;
+	ctrl_info->scsi_ml_can_queue = ctrl_info->max_outstanding_requests - PQI_RESERVED_IO_SLOTS;
 	ctrl_info->max_io_slots = ctrl_info->max_outstanding_requests;
 #if !KFEATURE_HAS_HOST_TAGSET_SUPPORT
 	ctrl_info->per_cpu_factor = ctrl_info->max_io_slots / num_online_cpus();
 #endif
 
-	ctrl_info->error_buffer_length =
-		ctrl_info->max_io_slots * PQI_ERROR_BUFFER_ELEMENT_LENGTH;
+	ctrl_info->error_buffer_length = ctrl_info->max_io_slots * PQI_ERROR_BUFFER_ELEMENT_LENGTH;
 
 	if (reset_devices)
-		max_transfer_size = min(ctrl_info->max_transfer_size,
-			PQI_MAX_TRANSFER_SIZE_KDUMP);
+		max_transfer_size = min(ctrl_info->max_transfer_size, PQI_MAX_TRANSFER_SIZE_KDUMP);
 	else
-		max_transfer_size = min(ctrl_info->max_transfer_size,
-			PQI_MAX_TRANSFER_SIZE);
+		max_transfer_size = min(ctrl_info->max_transfer_size, PQI_MAX_TRANSFER_SIZE);
 
 	max_sg_entries = max_transfer_size / PAGE_SIZE;
 
@@ -5144,9 +4967,7 @@ static void pqi_calculate_io_resources(struct pqi_ctrl_info *ctrl_info)
 
 	max_transfer_size = (max_sg_entries - 1) * PAGE_SIZE;
 
-	ctrl_info->sg_chain_buffer_length =
-		(max_sg_entries * sizeof(struct pqi_sg_descriptor)) +
-		PQI_EXTRA_SGL_MEMORY;
+	ctrl_info->sg_chain_buffer_length = (max_sg_entries * sizeof(struct pqi_sg_descriptor)) + PQI_EXTRA_SGL_MEMORY;
 	ctrl_info->sg_tablesize = max_sg_entries;
 	ctrl_info->max_sectors = max_transfer_size / 512;
 }
@@ -5163,8 +4984,7 @@ static void pqi_calculate_queue_resources(struct pqi_ctrl_info *ctrl_info)
 		int num_cpus;
 		int max_queue_groups;
 
-		max_queue_groups = min(ctrl_info->max_inbound_queues / 2,
-			ctrl_info->max_outbound_queues - 1);
+		max_queue_groups = min(ctrl_info->max_inbound_queues / 2, ctrl_info->max_outbound_queues - 1);
 		max_queue_groups = min(max_queue_groups, PQI_MAX_QUEUE_GROUPS);
 
 		num_cpus = num_online_cpus();
@@ -5178,39 +4998,27 @@ static void pqi_calculate_queue_resources(struct pqi_ctrl_info *ctrl_info)
 	 * Make sure that the max. inbound IU length is an even multiple
 	 * of our inbound element length.
 	 */
-	ctrl_info->max_inbound_iu_length =
-		(ctrl_info->max_inbound_iu_length_per_firmware /
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) *
+	ctrl_info->max_inbound_iu_length = (ctrl_info->max_inbound_iu_length_per_firmware / PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) *
 		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH;
 
-	num_elements_per_iq =
-		(ctrl_info->max_inbound_iu_length /
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
+	num_elements_per_iq = (ctrl_info->max_inbound_iu_length / PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
 
 	/* Add one because one element in each queue is unusable. */
 	num_elements_per_iq++;
 
-	num_elements_per_iq = min(num_elements_per_iq,
-		ctrl_info->max_elements_per_iq);
+	num_elements_per_iq = min(num_elements_per_iq, ctrl_info->max_elements_per_iq);
 
 	num_elements_per_oq = ((num_elements_per_iq - 1) * 2) + 1;
-	num_elements_per_oq = min(num_elements_per_oq,
-		ctrl_info->max_elements_per_oq);
+	num_elements_per_oq = min(num_elements_per_oq, ctrl_info->max_elements_per_oq);
 
 	ctrl_info->num_elements_per_iq = num_elements_per_iq;
 	ctrl_info->num_elements_per_oq = num_elements_per_oq;
 
-	ctrl_info->max_sg_per_iu =
-		((ctrl_info->max_inbound_iu_length -
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) /
-		sizeof(struct pqi_sg_descriptor)) +
-		PQI_MAX_EMBEDDED_SG_DESCRIPTORS;
+	ctrl_info->max_sg_per_iu = ((ctrl_info->max_inbound_iu_length - PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) /
+		sizeof(struct pqi_sg_descriptor)) + PQI_MAX_EMBEDDED_SG_DESCRIPTORS;
 
-	ctrl_info->max_sg_per_r56_iu =
-		((ctrl_info->max_inbound_iu_length -
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) /
-		sizeof(struct pqi_sg_descriptor)) +
-		PQI_MAX_EMBEDDED_R56_SG_DESCRIPTORS;
+	ctrl_info->max_sg_per_r56_iu = ((ctrl_info->max_inbound_iu_length - PQI_OPERATIONAL_IQ_ELEMENT_LENGTH) /
+		sizeof(struct pqi_sg_descriptor)) + PQI_MAX_EMBEDDED_R56_SG_DESCRIPTORS;
 }
 
 static inline void pqi_set_sg_descriptor(struct pqi_sg_descriptor *sg_descriptor,
@@ -5245,10 +5053,8 @@ static unsigned int pqi_build_sg_list(struct pqi_sg_descriptor *sg_descriptor,
 			break;
 		sg_descriptor++;
 		if (i == max_sg_per_iu) {
-			put_unaligned_le64((u64)io_request->sg_chain_buffer_dma_handle,
-				&sg_descriptor->address);
-			put_unaligned_le32((sg_count - num_sg_in_iu) * sizeof(*sg_descriptor),
-				&sg_descriptor->length);
+			put_unaligned_le64((u64)io_request->sg_chain_buffer_dma_handle, &sg_descriptor->address);
+			put_unaligned_le32((sg_count - num_sg_in_iu) * sizeof(*sg_descriptor), &sg_descriptor->length);
 			put_unaligned_le32(CISS_SG_CHAIN, &sg_descriptor->flags);
 			*chained = true;
 			num_sg_in_iu++;
@@ -5277,8 +5083,7 @@ static int pqi_build_raid_sg_list(struct pqi_ctrl_info *ctrl_info,
 	if (sg_count < 0)
 		return sg_count;
 
-	iu_length = offsetof(struct pqi_raid_path_request, sg_descriptors) -
-		PQI_REQUEST_HEADER_LENGTH;
+	iu_length = offsetof(struct pqi_raid_path_request, sg_descriptors) - PQI_REQUEST_HEADER_LENGTH;
 
 	if (sg_count == 0)
 		goto out;
@@ -5313,8 +5118,7 @@ static int pqi_build_aio_r1_sg_list(struct pqi_ctrl_info *ctrl_info,
 	if (sg_count < 0)
 		return sg_count;
 
-	iu_length = offsetof(struct pqi_aio_r1_path_request, sg_descriptors) -
-		PQI_REQUEST_HEADER_LENGTH;
+	iu_length = offsetof(struct pqi_aio_r1_path_request, sg_descriptors) - PQI_REQUEST_HEADER_LENGTH;
 	num_sg_in_iu = 0;
 
 	if (sg_count == 0)
@@ -5351,8 +5155,7 @@ static int pqi_build_aio_r56_sg_list(struct pqi_ctrl_info *ctrl_info,
 	if (sg_count < 0)
 		return sg_count;
 
-	iu_length = offsetof(struct pqi_aio_r56_path_request, sg_descriptors) -
-		PQI_REQUEST_HEADER_LENGTH;
+	iu_length = offsetof(struct pqi_aio_r56_path_request, sg_descriptors) - PQI_REQUEST_HEADER_LENGTH;
 	num_sg_in_iu = 0;
 
 	if (sg_count == 0)
@@ -5389,8 +5192,7 @@ static int pqi_build_aio_sg_list(struct pqi_ctrl_info *ctrl_info,
 	if (sg_count < 0)
 		return sg_count;
 
-	iu_length = offsetof(struct pqi_aio_path_request, sg_descriptors) -
-		PQI_REQUEST_HEADER_LENGTH;
+	iu_length = offsetof(struct pqi_aio_path_request, sg_descriptors) - PQI_REQUEST_HEADER_LENGTH;
 	num_sg_in_iu = 0;
 
 	if (sg_count == 0)
@@ -5587,7 +5389,6 @@ static int pqi_aio_submit_io(struct pqi_ctrl_info *ctrl_info,
 	int rc;
 	struct pqi_io_request *io_request;
 	struct pqi_aio_path_request *request;
-	struct pqi_scsi_dev *device;
 
 	io_request = pqi_alloc_io_request(ctrl_info, scmd);
 	if (!io_request)
@@ -5607,9 +5408,8 @@ static int pqi_aio_submit_io(struct pqi_ctrl_info *ctrl_info,
 	request->command_priority = io_high_prio;
 	put_unaligned_le16(io_request->index, &request->request_id);
 	request->error_index = request->request_id;
-	device = scmd->device->hostdata;
-	if (!pqi_is_logical_device(device) && ctrl_info->multi_lun_device_supported)
-		put_unaligned_le64(((scmd->device->lun) << 8), &request->lun_number);
+	if (!raid_bypass && ctrl_info->multi_lun_device_supported)
+		put_unaligned_le64(scmd->device->lun << 8, &request->lun_number);
 	if (cdb_length > sizeof(request->cdb))
 		cdb_length = sizeof(request->cdb);
 	request->cdb_length = cdb_length;
@@ -5809,6 +5609,7 @@ void pqi_prep_for_scsi_done(struct scsi_cmnd *scmd)
 	struct pqi_scsi_dev *device;
 	struct pqi_ctrl_info *ctrl_info;
 	struct Scsi_Host *shost;
+	struct completion *wait;
 
 	if (!scmd->device) {
 		set_host_byte(scmd, DID_NO_CONNECT);
@@ -5824,10 +5625,14 @@ void pqi_prep_for_scsi_done(struct scsi_cmnd *scmd)
 	shost = scmd->device->host;
 	ctrl_info = shost_to_hba(shost);
 
-        atomic_dec(&device->scsi_cmds_outstanding[scmd->device->lun]);
+	atomic_dec(&device->scsi_cmds_outstanding[scmd->device->lun]);
 #if !KFEATURE_HAS_HOST_TAGSET_SUPPORT
 	atomic_dec(&ctrl_info->total_scmds_outstanding);
 #endif
+
+	wait = (struct completion *)xchg(&scmd->host_scribble, NULL);
+	if (wait != PQI_NO_COMPLETION)
+		complete(wait);
 }
 
 static bool pqi_is_parity_write_stream(struct pqi_ctrl_info *ctrl_info,
@@ -5876,12 +5681,10 @@ static bool pqi_is_parity_write_stream(struct pqi_ctrl_info *ctrl_info,
 		 */
 		if ((pqi_stream_data->next_lba &&
 			rmd.first_block >= pqi_stream_data->next_lba) &&
-			rmd.first_block <= pqi_stream_data->next_lba +
-				rmd.block_cnt) {
-			pqi_stream_data->next_lba = rmd.first_block +
-				rmd.block_cnt;
-			pqi_stream_data->last_accessed = jiffies;
-			return true;
+			rmd.first_block <= pqi_stream_data->next_lba + rmd.block_cnt) {
+				pqi_stream_data->next_lba = rmd.first_block + rmd.block_cnt;
+				pqi_stream_data->last_accessed = jiffies;
+				return true;
 		}
 
 		/* unused entry */
@@ -5913,6 +5716,9 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 	u16 hw_queue;
 	struct pqi_queue_group *queue_group;
 	bool raid_bypassed;
+	u8 lun;
+
+	scmd->host_scribble = PQI_NO_COMPLETION;
 
 	device = scmd->device->hostdata;
 	ctrl_info = shost_to_hba(shost);
@@ -5923,7 +5729,9 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 		return 0;
 	}
 
-        atomic_inc(&device->scsi_cmds_outstanding[scmd->device->lun]);
+	lun = (u8)scmd->device->lun;
+
+	atomic_inc(&device->scsi_cmds_outstanding[lun]);
 #if !KFEATURE_HAS_HOST_TAGSET_SUPPORT
 	if (atomic_inc_return(&ctrl_info->total_scmds_outstanding) >
 		ctrl_info->scsi_ml_can_queue) {
@@ -5938,7 +5746,7 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 		return 0;
 	}
 
-	if (pqi_ctrl_blocked(ctrl_info)) {
+	if (pqi_ctrl_blocked(ctrl_info) || pqi_device_in_reset(device, lun)) {
 		rc = SCSI_MLQUEUE_HOST_BUSY;
 		goto out;
 	}
@@ -5974,7 +5782,8 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 
 out:
 	if (rc) {
-                atomic_dec(&device->scsi_cmds_outstanding[scmd->device->lun]);
+		scmd->host_scribble = NULL;
+		atomic_dec(&device->scsi_cmds_outstanding[lun]);
 #if !KFEATURE_HAS_HOST_TAGSET_SUPPORT
 		atomic_dec(&ctrl_info->total_scmds_outstanding);
 #endif
@@ -6072,7 +5881,7 @@ static int pqi_wait_until_inbound_queues_empty(struct pqi_ctrl_info *ctrl_info)
 }
 
 static void pqi_fail_io_queued_for_device(struct pqi_ctrl_info *ctrl_info,
-	struct pqi_scsi_dev *device)
+	struct pqi_scsi_dev *device, u8 lun)
 {
 	unsigned int i;
 	unsigned int path;
@@ -6087,19 +5896,18 @@ static void pqi_fail_io_queued_for_device(struct pqi_ctrl_info *ctrl_info,
 		queue_group = &ctrl_info->queue_groups[i];
 
 		for (path = 0; path < 2; path++) {
-			spin_lock_irqsave(
-				&queue_group->submit_lock[path], flags);
+			spin_lock_irqsave(&queue_group->submit_lock[path], flags);
 
-			list_for_each_entry_safe(io_request, next,
-				&queue_group->request_list[path],
-				request_list_entry) {
-
+			list_for_each_entry_safe(io_request, next, &queue_group->request_list[path], request_list_entry) {
 				scmd = io_request->scmd;
 				if (!scmd)
 					continue;
 
 				scsi_device = scmd->device->hostdata;
 				if (scsi_device != device)
+					continue;
+
+				if ((u8)scmd->device->lun != lun)
 					continue;
 
 				list_del(&io_request->request_list_entry);
@@ -6109,8 +5917,7 @@ static void pqi_fail_io_queued_for_device(struct pqi_ctrl_info *ctrl_info,
 				pqi_scsi_done(scmd);
 			}
 
-			spin_unlock_irqrestore(
-				&queue_group->submit_lock[path], flags);
+			spin_unlock_irqrestore(&queue_group->submit_lock[path], flags);
 		}
 	}
 }
@@ -6188,7 +5995,7 @@ static int pqi_wait_for_lun_reset_completion(struct pqi_ctrl_info *ctrl_info,
 		}
 
 		wait_secs += PQI_LUN_RESET_POLL_COMPLETION_SECS;
-                cmds_outstanding = atomic_read(&device->scsi_cmds_outstanding[lun]);
+		cmds_outstanding = atomic_read(&device->scsi_cmds_outstanding[lun]);
 		dev_warn(&ctrl_info->pci_dev->dev,
 			"scsi %d:%d:%d:%d: waiting %u seconds for LUN reset to complete (%d command(s) outstanding)\n",
 			ctrl_info->scsi_host->host_no, device->bus, device->target, lun, wait_secs, cmds_outstanding);
@@ -6199,15 +6006,13 @@ static int pqi_wait_for_lun_reset_completion(struct pqi_ctrl_info *ctrl_info,
 
 #define PQI_LUN_RESET_FIRMWARE_TIMEOUT_SECS	30
 
-static int pqi_lun_reset(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd)
+static int pqi_lun_reset(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev *device, u8 lun)
 {
 	int rc;
 	struct pqi_io_request *io_request;
 	DECLARE_COMPLETION_ONSTACK(wait);
 	struct pqi_task_management_request *request;
-	struct pqi_scsi_dev *device;
 
-	device = scmd->device->hostdata;
 	io_request = pqi_alloc_io_request(ctrl_info, NULL);
 	io_request->io_complete_callback = pqi_lun_reset_complete;
 	io_request->context = &wait;
@@ -6216,21 +6021,18 @@ static int pqi_lun_reset(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd
 	memset(request, 0, sizeof(*request));
 
 	request->header.iu_type = PQI_REQUEST_IU_TASK_MANAGEMENT;
-	put_unaligned_le16(sizeof(*request) - PQI_REQUEST_HEADER_LENGTH,
-		&request->header.iu_length);
+	put_unaligned_le16(sizeof(*request) - PQI_REQUEST_HEADER_LENGTH, &request->header.iu_length);
 	put_unaligned_le16(io_request->index, &request->request_id);
-	memcpy(request->lun_number, device->scsi3addr,
-		sizeof(request->lun_number));
+	memcpy(request->lun_number, device->scsi3addr, sizeof(request->lun_number));
 	if (!pqi_is_logical_device(device) && ctrl_info->multi_lun_device_supported)
-		request->ml_device_lun_number = (u8)scmd->device->lun;
+		request->ml_device_lun_number = lun;
 	request->task_management_function = SOP_TASK_MANAGEMENT_LUN_RESET;
 	if (ctrl_info->tmf_iu_timeout_supported)
 		put_unaligned_le16(PQI_LUN_RESET_FIRMWARE_TIMEOUT_SECS, &request->timeout);
 
-	pqi_start_io(ctrl_info, &ctrl_info->queue_groups[PQI_DEFAULT_QUEUE_GROUP], RAID_PATH,
-		io_request);
+	pqi_start_io(ctrl_info, &ctrl_info->queue_groups[PQI_DEFAULT_QUEUE_GROUP], RAID_PATH, io_request);
 
-	rc = pqi_wait_for_lun_reset_completion(ctrl_info, device, (u8)scmd->device->lun, &wait);
+	rc = pqi_wait_for_lun_reset_completion(ctrl_info, device, lun, &wait);
 	if (rc == 0)
 		rc = io_request->status;
 
@@ -6244,18 +6046,16 @@ static int pqi_lun_reset(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd
 #define PQI_LUN_RESET_PENDING_IO_TIMEOUT_MSECS		(10 * 60 * 1000)
 #define PQI_LUN_RESET_FAILED_PENDING_IO_TIMEOUT_MSECS	(2 * 60 * 1000)
 
-static int pqi_lun_reset_with_retries(struct pqi_ctrl_info *ctrl_info, struct scsi_cmnd *scmd)
+static int pqi_lun_reset_with_retries(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev *device, u8 lun)
 {
 	int reset_rc;
 	int wait_rc;
 	unsigned int retries;
 	unsigned long timeout_msecs;
-	struct pqi_scsi_dev *device;
 
-	device = scmd->device->hostdata;
 	for (retries = 0;;) {
-		reset_rc = pqi_lun_reset(ctrl_info, scmd);
-		if (reset_rc == 0 || reset_rc == -ENODEV || ++retries > PQI_LUN_RESET_RETRIES)
+		reset_rc = pqi_lun_reset(ctrl_info, device, lun);
+		if (reset_rc == 0 || reset_rc == -ENODEV || reset_rc == -ENXIO || ++retries > PQI_LUN_RESET_RETRIES)
 			break;
 		msleep(PQI_LUN_RESET_RETRY_INTERVAL_MSECS);
 	}
@@ -6263,66 +6063,127 @@ static int pqi_lun_reset_with_retries(struct pqi_ctrl_info *ctrl_info, struct sc
 	timeout_msecs = reset_rc ? PQI_LUN_RESET_FAILED_PENDING_IO_TIMEOUT_MSECS :
 		PQI_LUN_RESET_PENDING_IO_TIMEOUT_MSECS;
 
-	wait_rc = pqi_device_wait_for_pending_io(ctrl_info, device, scmd->device->lun, timeout_msecs);
+	wait_rc = pqi_device_wait_for_pending_io(ctrl_info, device, lun, timeout_msecs);
 	if (wait_rc && reset_rc == 0)
 		reset_rc = wait_rc;
 
 	return reset_rc == 0 ? SUCCESS : FAILED;
 }
 
-static int pqi_device_reset(struct pqi_ctrl_info *ctrl_info,
-	struct scsi_cmnd *scmd)
+static int pqi_device_reset(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev *device, u8 lun)
 {
 	int rc;
-	struct pqi_scsi_dev *device;
 
-	device = scmd->device->hostdata;
 	pqi_ctrl_block_requests(ctrl_info);
 	pqi_ctrl_wait_until_quiesced(ctrl_info);
-	pqi_fail_io_queued_for_device(ctrl_info, device);
+	pqi_fail_io_queued_for_device(ctrl_info, device, lun);
 	rc = pqi_wait_until_inbound_queues_empty(ctrl_info);
+	pqi_device_reset_start(device, lun);
+	pqi_ctrl_unblock_requests(ctrl_info);
 	if (rc)
 		rc = FAILED;
 	else
-		rc = pqi_lun_reset_with_retries(ctrl_info, scmd);
-	pqi_ctrl_unblock_requests(ctrl_info);
+		rc = pqi_lun_reset_with_retries(ctrl_info, device, lun);
+	pqi_device_reset_done(device, lun);
+
+	return rc;
+}
+
+static int pqi_device_reset_handler(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev *device, u8 lun, struct scsi_cmnd *scmd, u8 scsi_opcode)
+{
+	int rc;
+
+	mutex_lock(&ctrl_info->lun_reset_mutex);
+
+	dev_err(&ctrl_info->pci_dev->dev,
+		"resetting scsi %d:%d:%d:%u SCSI cmd at %p due to cmd opcode 0x%02x\n",
+		ctrl_info->scsi_host->host_no, device->bus, device->target, lun, scmd, scsi_opcode);
+
+	pqi_check_ctrl_health(ctrl_info);
+	if (pqi_ctrl_offline(ctrl_info))
+		rc = FAILED;
+	else
+		rc = pqi_device_reset(ctrl_info, device, lun);
+
+	dev_err(&ctrl_info->pci_dev->dev,
+		"reset of scsi %d:%d:%d:%u: %s\n",
+		ctrl_info->scsi_host->host_no, device->bus, device->target, lun,
+		rc == SUCCESS ? "SUCCESS" : "FAILED");
+
+	mutex_unlock(&ctrl_info->lun_reset_mutex);
 
 	return rc;
 }
 
 static int pqi_eh_device_reset_handler(struct scsi_cmnd *scmd)
 {
-	int rc;
 	struct Scsi_Host *shost;
 	struct pqi_ctrl_info *ctrl_info;
 	struct pqi_scsi_dev *device;
+	u8 scsi_opcode;
+
+	shost = scmd->device->host;
+	ctrl_info = shost_to_hba(shost);
+	device = scmd->device->hostdata;
+	scsi_opcode = scmd->cmd_len > 0 ? scmd->cmnd[0] : 0xff;
+	
+	return pqi_device_reset_handler(ctrl_info, device, (u8)scmd->device->lun, scmd, scsi_opcode);
+}
+
+static void pqi_tmf_worker(struct work_struct *work)
+{
+	struct pqi_tmf_work *tmf_work;
+	struct scsi_cmnd *scmd;
+
+	tmf_work = container_of(work, struct pqi_tmf_work, work_struct);
+	scmd = (struct scsi_cmnd *)xchg(&tmf_work->scmd, NULL);
+
+	pqi_device_reset_handler(tmf_work->ctrl_info, tmf_work->device, tmf_work->lun, scmd, tmf_work->scsi_opcode);
+}
+
+static int pqi_eh_abort_handler(struct scsi_cmnd *scmd)
+{
+	struct Scsi_Host *shost;
+	struct pqi_ctrl_info *ctrl_info;
+	struct pqi_scsi_dev *device;
+	struct pqi_tmf_work *tmf_work;
+	DECLARE_COMPLETION_ONSTACK(wait);
 
 	shost = scmd->device->host;
 	ctrl_info = shost_to_hba(shost);
 	device = scmd->device->hostdata;
 
-	mutex_lock(&ctrl_info->lun_reset_mutex);
+	dev_err(&ctrl_info->pci_dev->dev,
+		"attempting TASK ABORT on scsi %d:%d:%d:%d for SCSI cmd at %p\n",
+		shost->host_no, device->bus, device->target, (int)scmd->device->lun, scmd);
+
+	if (cmpxchg(&scmd->host_scribble, PQI_NO_COMPLETION, (void *)&wait) == NULL) {
+		dev_err(&ctrl_info->pci_dev->dev,
+			"scsi %d:%d:%d:%d for SCSI cmd at %p already completed\n",
+			shost->host_no, device->bus, device->target, (int)scmd->device->lun, scmd);
+		scmd->result = DID_RESET << 16;
+		goto out;
+	}
+
+	tmf_work = &device->tmf_work[scmd->device->lun];
+
+	if (cmpxchg(&tmf_work->scmd, NULL, scmd) == NULL) {
+		tmf_work->ctrl_info = ctrl_info;
+		tmf_work->device = device;
+		tmf_work->lun = (u8)scmd->device->lun;
+		tmf_work->scsi_opcode = scmd->cmd_len > 0 ? scmd->cmnd[0] : 0xff;
+		schedule_work(&tmf_work->work_struct);
+	}
+
+	wait_for_completion(&wait);
 
 	dev_err(&ctrl_info->pci_dev->dev,
-		"resetting scsi %d:%d:%d:%d due to cmd 0x%02x\n",
-		shost->host_no,
-		device->bus, device->target, (u32)scmd->device->lun,
-		scmd->cmd_len > 0 ? scmd->cmnd[0] : 0xff);
+		"TASK ABORT on scsi %d:%d:%d:%d for SCSI cmd at %p: SUCCESS\n",
+		shost->host_no, device->bus, device->target, (int)scmd->device->lun, scmd);
 
-	pqi_check_ctrl_health(ctrl_info);
-	if (pqi_ctrl_offline(ctrl_info))
-		rc = FAILED;
-	else
-		rc = pqi_device_reset(ctrl_info, scmd);
+out:
 
-	dev_err(&ctrl_info->pci_dev->dev,
-		"reset of scsi %d:%d:%d:%d: %s\n",
-		shost->host_no, device->bus, device->target, (u32)scmd->device->lun,
-		rc == SUCCESS ? "SUCCESS" : "FAILED");
-
-	mutex_unlock(&ctrl_info->lun_reset_mutex);
-
-	return rc;
+	return SUCCESS;
 }
 
 static int pqi_slave_alloc(struct scsi_device *sdev)
@@ -6360,14 +6221,12 @@ static int pqi_slave_alloc(struct scsi_device *sdev)
 		device->sdev = sdev;
 		if (device->queue_depth) {
 			device->advertised_queue_depth = device->queue_depth;
-			scsi_change_queue_depth(sdev,
-				device->advertised_queue_depth);
+			scsi_change_queue_depth(sdev, device->advertised_queue_depth);
 		}
 		if (pqi_is_logical_device(device)) {
 			pqi_disable_write_same(sdev);
 			if (pqi_limit_xfer_to_1MB)
-				blk_queue_max_hw_sectors(sdev->request_queue,
-					PQI_1MB_SECTORS);
+				blk_queue_max_hw_sectors(sdev->request_queue, PQI_1MB_SECTORS);
 		} else {
 			sdev->allow_restart = 1;
 			if (device->device_type == SA_DEVICE_TYPE_NVME)
@@ -6441,21 +6300,21 @@ static int pqi_getpciinfo_ioctl(struct pqi_ctrl_info *ctrl_info, void __user *ar
 	struct pci_dev *pci_dev;
 	u32 subsystem_vendor;
 	u32 subsystem_device;
-	cciss_pci_info_struct pciinfo;
+	cciss_pci_info_struct pci_info;
 
 	if (!arg)
 		return -EINVAL;
 
 	pci_dev = ctrl_info->pci_dev;
 
-	pciinfo.domain = pci_domain_nr(pci_dev->bus);
-	pciinfo.bus = pci_dev->bus->number;
-	pciinfo.dev_fn = pci_dev->devfn;
+	pci_info.domain = pci_domain_nr(pci_dev->bus);
+	pci_info.bus = pci_dev->bus->number;
+	pci_info.dev_fn = pci_dev->devfn;
 	subsystem_vendor = pci_dev->subsystem_vendor;
 	subsystem_device = pci_dev->subsystem_device;
-	pciinfo.board_id = ((subsystem_device << 16) & 0xffff0000) | subsystem_vendor;
+	pci_info.board_id = ((subsystem_device << 16) & 0xffff0000) | subsystem_vendor;
 
-	if (copy_to_user(arg, &pciinfo, sizeof(pciinfo)))
+	if (copy_to_user(arg, &pci_info, sizeof(pci_info)))
 		return -EFAULT;
 
 	return 0;
@@ -6532,11 +6391,9 @@ static void pqi_error_info_to_ciss(struct pqi_raid_error_info *pqi_error_info,
 		break;
 	}
 
-	sense_data_length =
-		get_unaligned_le16(&pqi_error_info->sense_data_length);
+	sense_data_length = get_unaligned_le16(&pqi_error_info->sense_data_length);
 	if (sense_data_length == 0)
-		sense_data_length =
-		get_unaligned_le16(&pqi_error_info->response_data_length);
+		sense_data_length = get_unaligned_le16(&pqi_error_info->response_data_length);
 	if (sense_data_length)
 		if (sense_data_length > sizeof(pqi_error_info->data))
 			sense_data_length = sizeof(pqi_error_info->data);
@@ -6603,10 +6460,8 @@ static int pqi_passthru_ioctl(struct pqi_ctrl_info *ctrl_info, void __user *arg)
 	memset(&request, 0, sizeof(request));
 
 	request.header.iu_type = PQI_REQUEST_IU_RAID_PATH_IO;
-	iu_length = offsetof(struct pqi_raid_path_request, sg_descriptors) -
-		PQI_REQUEST_HEADER_LENGTH;
-	memcpy(request.lun_number, iocommand.LUN_info.LunAddrBytes,
-		sizeof(request.lun_number));
+	iu_length = offsetof(struct pqi_raid_path_request, sg_descriptors) - PQI_REQUEST_HEADER_LENGTH;
+	memcpy(request.lun_number, iocommand.LUN_info.LunAddrBytes, sizeof(request.lun_number));
 	memcpy(request.cdb, iocommand.Request.CDB, iocommand.Request.CDBLen);
 	request.additional_cdb_bytes_usage = SOP_ADDITIONAL_CDB_BYTES_0;
 
@@ -6648,24 +6503,19 @@ static int pqi_passthru_ioctl(struct pqi_ctrl_info *ctrl_info, void __user *arg)
 		PQI_SYNC_FLAGS_INTERRUPTABLE, &pqi_error_info);
 
 	if (iocommand.buf_size > 0)
-		pqi_pci_unmap(ctrl_info->pci_dev, request.sg_descriptors, 1,
-			DMA_BIDIRECTIONAL);
+		pqi_pci_unmap(ctrl_info->pci_dev, request.sg_descriptors, 1, DMA_BIDIRECTIONAL);
 
 	memset(&iocommand.error_info, 0, sizeof(iocommand.error_info));
 
 	if (rc == 0) {
 		pqi_error_info_to_ciss(&pqi_error_info, &ciss_error_info);
 		iocommand.error_info.ScsiStatus = ciss_error_info.scsi_status;
-		iocommand.error_info.CommandStatus =
-			ciss_error_info.command_status;
+		iocommand.error_info.CommandStatus = ciss_error_info.command_status;
 		sense_data_length = ciss_error_info.sense_data_length;
 		if (sense_data_length) {
-			if (sense_data_length >
-				sizeof(iocommand.error_info.SenseInfo))
-				sense_data_length =
-					sizeof(iocommand.error_info.SenseInfo);
-			memcpy(iocommand.error_info.SenseInfo,
-				pqi_error_info.data, sense_data_length);
+			if (sense_data_length > sizeof(iocommand.error_info.SenseInfo))
+				sense_data_length = sizeof(iocommand.error_info.SenseInfo);
+			memcpy(iocommand.error_info.SenseInfo, pqi_error_info.data, sense_data_length);
 			iocommand.error_info.SenseLen = sense_data_length;
 		}
 	}
@@ -7062,38 +6912,30 @@ static ssize_t pqi_path_info_show(struct device *dev,
 					device->lun,
 					scsi_device_type(device->devtype));
 
-		if (device->devtype == TYPE_RAID ||
-			pqi_is_logical_device(device))
+		if (device->devtype == TYPE_RAID || pqi_is_logical_device(device))
 			goto end_buffer;
 
-		memcpy(&phys_connector, &device->phys_connector[i],
-			sizeof(phys_connector));
+		memcpy(&phys_connector, &device->phys_connector[i], sizeof(phys_connector));
 		if (phys_connector[0] < '0')
 			phys_connector[0] = '0';
 		if (phys_connector[1] < '0')
 			phys_connector[1] = '0';
 
 		output_len += scnprintf(buffer + output_len,
-					PAGE_SIZE - output_len,
-					"PORT: %.2s ", phys_connector);
+			PAGE_SIZE - output_len, "PORT: %.2s ", phys_connector);
 
 		box = device->box[i];
 		if (box != 0 && box != 0xFF)
 			output_len += scnprintf(buffer + output_len,
-						PAGE_SIZE - output_len,
-						"BOX: %hhu ", box);
+				PAGE_SIZE - output_len, "BOX: %hhu ", box);
 
-		if ((device->devtype == TYPE_DISK ||
-			device->devtype == TYPE_ZBC) &&
-			pqi_expose_device(device))
+		if ((device->devtype == TYPE_DISK || device->devtype == TYPE_ZBC) && pqi_expose_device(device))
 			output_len += scnprintf(buffer + output_len,
-						PAGE_SIZE - output_len,
-						"BAY: %hhu ", bay);
+				PAGE_SIZE - output_len, "BAY: %hhu ", bay);
 
 end_buffer:
 		output_len += scnprintf(buffer + output_len,
-					PAGE_SIZE - output_len,
-					"%s\n", active);
+			PAGE_SIZE - output_len, "%s\n", active);
 	}
 
 	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
@@ -7290,6 +7132,18 @@ static ssize_t pqi_sas_ncq_prio_enable_store(struct device *dev,
 	return count;
 }
 
+static ssize_t pqi_numa_node_show(struct device *dev,
+	struct device_attribute *attr, char *buffer)
+{
+	struct scsi_device *sdev;
+	struct pqi_ctrl_info *ctrl_info;
+
+	sdev = to_scsi_device(dev);
+	ctrl_info = shost_to_hba(sdev->host);
+
+	return scnprintf(buffer, PAGE_SIZE, "%d\n", ctrl_info->numa_node);
+}
+
 static DEVICE_ATTR(lunid, 0444, pqi_lunid_show, NULL);
 static DEVICE_ATTR(unique_id, 0444, pqi_unique_id_show, NULL);
 static DEVICE_ATTR(path_info, 0444, pqi_path_info_show, NULL);
@@ -7299,6 +7153,7 @@ static DEVICE_ATTR(raid_level, 0444, pqi_raid_level_show, NULL);
 static DEVICE_ATTR(raid_bypass_cnt, 0444, pqi_raid_bypass_cnt_show, NULL);
 static DEVICE_ATTR(sas_ncq_prio_enable, 0644,
 	pqi_sas_ncq_prio_enable_show, pqi_sas_ncq_prio_enable_store);
+static DEVICE_ATTR(numa_node, 0444, pqi_numa_node_show, NULL);
 
 static struct PQI_DEVICE_ATTRIBUTE *pqi_sdev_attrs[] = {
 	PQI_ATTRIBUTE(&dev_attr_lunid),
@@ -7309,6 +7164,7 @@ static struct PQI_DEVICE_ATTRIBUTE *pqi_sdev_attrs[] = {
 	PQI_ATTRIBUTE(&dev_attr_raid_level),
 	PQI_ATTRIBUTE(&dev_attr_raid_bypass_cnt),
 	PQI_ATTRIBUTE(&dev_attr_sas_ncq_prio_enable),
+	PQI_ATTRIBUTE(&dev_attr_numa_node),
 	NULL
 };
 PQI_ATTRIBUTE_GROUPS(pqi_sdev);
@@ -7322,6 +7178,7 @@ static struct scsi_host_template pqi_driver_template = {
 	.scan_finished = pqi_scan_finished,
 	.this_id = -1,
 	.eh_device_reset_handler = pqi_eh_device_reset_handler,
+	.eh_abort_handler = pqi_eh_abort_handler,
 	.ioctl = pqi_ioctl,
 	.slave_alloc = pqi_slave_alloc,
 	.slave_configure = pqi_slave_configure,
@@ -7472,8 +7329,7 @@ static int pqi_get_ctrl_serial_number(struct pqi_ctrl_info *ctrl_info)
 	if (rc)
 		goto out;
 
-	memcpy(ctrl_info->serial_number, sense_info->ctrl_serial_number,
-		sizeof(sense_info->ctrl_serial_number));
+	memcpy(ctrl_info->serial_number, sense_info->ctrl_serial_number, sizeof(sense_info->ctrl_serial_number));
 	ctrl_info->serial_number[sizeof(sense_info->ctrl_serial_number)] = '\0';
 
 out:
@@ -7504,8 +7360,7 @@ static int pqi_get_ctrl_product_details(struct pqi_ctrl_info *ctrl_info)
 		memcpy(ctrl_info->firmware_version,
 			identify->firmware_version_short,
 			sizeof(identify->firmware_version_short));
-		ctrl_info->firmware_version
-			[sizeof(identify->firmware_version_short)] = '\0';
+		ctrl_info->firmware_version[sizeof(identify->firmware_version_short)] = '\0';
 		scnprintf(ctrl_info->firmware_version +
 			strlen(ctrl_info->firmware_version),
 			sizeof(ctrl_info->firmware_version),
@@ -7513,16 +7368,13 @@ static int pqi_get_ctrl_product_details(struct pqi_ctrl_info *ctrl_info)
 			get_unaligned_le16(&identify->firmware_build_number));
 	}
 
-	memcpy(ctrl_info->model, identify->product_id,
-		sizeof(identify->product_id));
+	memcpy(ctrl_info->model, identify->product_id, sizeof(identify->product_id));
 	ctrl_info->model[sizeof(identify->product_id)] = '\0';
 
-	memcpy(ctrl_info->vendor, identify->vendor_id,
-		sizeof(identify->vendor_id));
+	memcpy(ctrl_info->vendor, identify->vendor_id, sizeof(identify->vendor_id));
 	ctrl_info->vendor[sizeof(identify->vendor_id)] = '\0';
 
-	dev_info(&ctrl_info->pci_dev->dev,
-		"Firmware version: %s\n", ctrl_info->firmware_version);
+	dev_info(&ctrl_info->pci_dev->dev, "Firmware version: %s\n", ctrl_info->firmware_version);
 
 out:
 	kfree(identify);
@@ -7592,14 +7444,10 @@ static int pqi_config_table_update(struct pqi_ctrl_info *ctrl_info,
 	memset(&request, 0, sizeof(request));
 
 	request.header.iu_type = PQI_REQUEST_IU_VENDOR_GENERAL;
-	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH,
-		&request.header.iu_length);
-	put_unaligned_le16(PQI_VENDOR_GENERAL_CONFIG_TABLE_UPDATE,
-		&request.function_code);
-	put_unaligned_le16(first_section,
-		&request.data.config_table_update.first_section);
-	put_unaligned_le16(last_section,
-		&request.data.config_table_update.last_section);
+	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH, &request.header.iu_length);
+	put_unaligned_le16(PQI_VENDOR_GENERAL_CONFIG_TABLE_UPDATE, &request.function_code);
+	put_unaligned_le16(first_section, &request.data.config_table_update.first_section);
+	put_unaligned_le16(last_section, &request.data.config_table_update.last_section);
 
 	return pqi_submit_raid_request_synchronous(ctrl_info, &request.header, 0, NULL);
 }
@@ -7693,8 +7541,10 @@ static void pqi_ctrl_update_feature_flags(struct pqi_ctrl_info *ctrl_info,
 		ctrl_info->rpl_extended_format_4_5_supported = firmware_feature->enabled;
 		break;
 	case PQI_FIRMWARE_FEATURE_MULTI_LUN_DEVICE_SUPPORT:
-		ctrl_info->multi_lun_device_supported =
-			firmware_feature->enabled;
+		ctrl_info->multi_lun_device_supported = firmware_feature->enabled;
+		break;
+	case PQI_FIRMWARE_FEATURE_CTRL_LOGGING:
+		ctrl_info->ctrl_logging_supported = firmware_feature->enabled;
 		break;
 	}
 
@@ -7801,6 +7651,11 @@ static struct pqi_firmware_feature pqi_firmware_features[] = {
 		.feature_bit = PQI_FIRMWARE_FEATURE_MULTI_LUN_DEVICE_SUPPORT,
 		.feature_status = pqi_ctrl_update_feature_flags,
 	},
+	{
+		.feature_name = "Controller Data Logging",
+		.feature_bit = PQI_FIRMWARE_FEATURE_CTRL_LOGGING,
+		.feature_status = pqi_ctrl_update_feature_flags,
+	},
 };
 
 static void pqi_process_firmware_features(
@@ -7817,8 +7672,7 @@ static void pqi_process_firmware_features(
 	firmware_features = section_info->section;
 	firmware_features_iomem_addr = section_info->section_iomem_addr;
 
-	for (i = 0, num_features_supported = 0;
-		i < ARRAY_SIZE(pqi_firmware_features); i++) {
+	for (i = 0, num_features_supported = 0; i < ARRAY_SIZE(pqi_firmware_features); i++) {
 		if (pqi_is_firmware_feature_supported(firmware_features,
 			pqi_firmware_features[i].feature_bit)) {
 			pqi_firmware_features[i].supported = true;
@@ -7839,8 +7693,7 @@ static void pqi_process_firmware_features(
 			pqi_firmware_features[i].feature_bit);
 	}
 
-	rc = pqi_enable_firmware_features(ctrl_info, firmware_features,
-		firmware_features_iomem_addr);
+	rc = pqi_enable_firmware_features(ctrl_info, firmware_features, firmware_features_iomem_addr);
 	if (rc) {
 		dev_err(&ctrl_info->pci_dev->dev,
 			"failed to enable firmware features in PQI configuration table\n");
@@ -7861,8 +7714,7 @@ static void pqi_process_firmware_features(
 			pqi_firmware_features[i].feature_bit)) {
 				pqi_firmware_features[i].enabled = true;
 		}
-		pqi_firmware_feature_update(ctrl_info,
-			&pqi_firmware_features[i]);
+		pqi_firmware_feature_update(ctrl_info, &pqi_firmware_features[i]);
 	}
 }
 
@@ -7903,6 +7755,7 @@ static void pqi_ctrl_reset_config(struct pqi_ctrl_info *ctrl_info)
 	ctrl_info->firmware_triage_supported = false;
 	ctrl_info->rpl_extended_format_4_5_supported = false;
 	ctrl_info->multi_lun_device_supported = false;
+	ctrl_info->ctrl_logging_supported = false;
 }
 
 static int pqi_process_config_table(struct pqi_ctrl_info *ctrl_info)
@@ -7955,18 +7808,12 @@ static int pqi_process_config_table(struct pqi_ctrl_info *ctrl_info)
 				dev_warn(&ctrl_info->pci_dev->dev,
 				"heartbeat disabled by module parameter\n");
 			else
-				ctrl_info->heartbeat_counter =
-					table_iomem_addr +
-					section_offset +
-					offsetof(struct pqi_config_table_heartbeat,
-						heartbeat_counter);
+				ctrl_info->heartbeat_counter = table_iomem_addr + section_offset +
+					offsetof(struct pqi_config_table_heartbeat, heartbeat_counter);
 			break;
 		case PQI_CONFIG_TABLE_SECTION_SOFT_RESET:
-			ctrl_info->soft_reset_status =
-				table_iomem_addr +
-				section_offset +
-				offsetof(struct pqi_config_table_soft_reset,
-					soft_reset_status);
+			ctrl_info->soft_reset_status = table_iomem_addr + section_offset +
+				offsetof(struct pqi_config_table_soft_reset, soft_reset_status);
 			break;
 		}
 
@@ -8043,6 +7890,9 @@ static void pqi_perform_lockup_action(void)
 	}
 }
 
+#define PQI_CTRL_LOG_TOTAL_SIZE	(4 * 1024 * 1024)
+#define PQI_CTRL_LOG_MIN_SIZE	(PQI_CTRL_LOG_TOTAL_SIZE / PQI_HOST_MAX_SG_DESCRIPTORS)
+
 static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 {
 	int rc;
@@ -8051,6 +7901,12 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 	if (reset_devices) {
 		if (pqi_is_fw_triage_supported(ctrl_info)) {
 			rc = sis_wait_for_fw_triage_completion(ctrl_info);
+			if (rc)
+				return rc;
+		}
+		if (sis_is_ctrl_logging_supported(ctrl_info)) {
+			sis_notify_kdump(ctrl_info);
+			rc = sis_wait_for_ctrl_logging_completion(ctrl_info);
 			if (rc)
 				return rc;
 		}
@@ -8103,15 +7959,11 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 		ctrl_info->enable_stream_detection = true;
 
 	if (reset_devices) {
-		if (ctrl_info->max_outstanding_requests >
-			PQI_MAX_OUTSTANDING_REQUESTS_KDUMP)
-				ctrl_info->max_outstanding_requests =
-					PQI_MAX_OUTSTANDING_REQUESTS_KDUMP;
+		if (ctrl_info->max_outstanding_requests > PQI_MAX_OUTSTANDING_REQUESTS_KDUMP)
+			ctrl_info->max_outstanding_requests = PQI_MAX_OUTSTANDING_REQUESTS_KDUMP;
 	} else {
-		if (ctrl_info->max_outstanding_requests >
-			PQI_MAX_OUTSTANDING_REQUESTS)
-				ctrl_info->max_outstanding_requests =
-					PQI_MAX_OUTSTANDING_REQUESTS;
+		if (ctrl_info->max_outstanding_requests > PQI_MAX_OUTSTANDING_REQUESTS)
+			ctrl_info->max_outstanding_requests = PQI_MAX_OUTSTANDING_REQUESTS;
 	}
 
 	pqi_calculate_io_resources(ctrl_info);
@@ -8179,8 +8031,7 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 		return rc;
 
 	if (ctrl_info->num_msix_vectors_enabled < ctrl_info->num_queue_groups) {
-		ctrl_info->max_msix_vectors =
-			ctrl_info->num_msix_vectors_enabled;
+		ctrl_info->max_msix_vectors = ctrl_info->num_msix_vectors_enabled;
 		pqi_calculate_queue_resources(ctrl_info);
 	}
 
@@ -8222,8 +8073,7 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 				"error obtaining advanced RAID bypass configuration\n");
 			return rc;
 		}
-		ctrl_info->ciss_report_log_flags |=
-			CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX;
+		ctrl_info->ciss_report_log_flags |= CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX;
 	}
 
 	rc = pqi_enable_events(ctrl_info);
@@ -8237,6 +8087,11 @@ static int pqi_ctrl_init(struct pqi_ctrl_info *ctrl_info)
 	rc = pqi_register_scsi(ctrl_info);
 	if (rc)
 		return rc;
+
+	if (ctrl_info->ctrl_logging_supported && !reset_devices) {
+		pqi_host_setup_buffer(ctrl_info, &ctrl_info->ctrl_log_memory, PQI_CTRL_LOG_TOTAL_SIZE, PQI_CTRL_LOG_MIN_SIZE);
+		pqi_host_memory_update(ctrl_info, &ctrl_info->ctrl_log_memory, PQI_VENDOR_GENERAL_CTRL_LOG_MEMORY_UPDATE);
+	}
 
 	rc = pqi_get_ctrl_product_details(ctrl_info);
 	if (rc) {
@@ -8390,8 +8245,7 @@ static int pqi_ctrl_init_resume(struct pqi_ctrl_info *ctrl_info)
 				"error obtaining advanced RAID bypass configuration\n");
 			return rc;
 		}
-		ctrl_info->ciss_report_log_flags |=
-			CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX;
+		ctrl_info->ciss_report_log_flags |= CISS_REPORT_LOG_FLAG_DRIVE_TYPE_MIX;
 	}
 
 	rc = pqi_enable_events(ctrl_info);
@@ -8422,8 +8276,22 @@ static int pqi_ctrl_init_resume(struct pqi_ctrl_info *ctrl_info)
 		return rc;
 	}
 
-	if (pqi_ofa_in_progress(ctrl_info))
+	if (pqi_ofa_in_progress(ctrl_info)) {
 		pqi_ctrl_unblock_scan(ctrl_info);
+		if (ctrl_info->ctrl_logging_supported) {
+			if (!ctrl_info->ctrl_log_memory.host_memory)
+				pqi_host_setup_buffer(ctrl_info,
+					&ctrl_info->ctrl_log_memory,
+					PQI_CTRL_LOG_TOTAL_SIZE,
+					PQI_CTRL_LOG_MIN_SIZE);
+			pqi_host_memory_update(ctrl_info,
+				&ctrl_info->ctrl_log_memory, PQI_VENDOR_GENERAL_CTRL_LOG_MEMORY_UPDATE);
+		} else {
+			if (ctrl_info->ctrl_log_memory.host_memory)
+				pqi_host_free_buffer(ctrl_info,
+					&ctrl_info->ctrl_log_memory);
+		}
+	}
 
 	pqi_scan_scsi_devices(ctrl_info);
 
@@ -8553,10 +8421,8 @@ static struct pqi_ctrl_info *pqi_alloc_ctrl_info(int numa_node)
 	ctrl_info->max_msix_vectors = PQI_MAX_MSIX_VECTORS;
 
 	ctrl_info->ciss_report_log_flags = CISS_REPORT_LOG_FLAG_UNIQUE_LUN_ID;
-	ctrl_info->max_transfer_encrypted_sas_sata =
-		PQI_DEFAULT_MAX_TRANSFER_ENCRYPTED_SAS_SATA;
-	ctrl_info->max_transfer_encrypted_nvme =
-		PQI_DEFAULT_MAX_TRANSFER_ENCRYPTED_NVME;
+	ctrl_info->max_transfer_encrypted_sas_sata = PQI_DEFAULT_MAX_TRANSFER_ENCRYPTED_SAS_SATA;
+	ctrl_info->max_transfer_encrypted_nvme = PQI_DEFAULT_MAX_TRANSFER_ENCRYPTED_NVME;
 	ctrl_info->max_write_raid_5_6 = PQI_DEFAULT_MAX_WRITE_RAID_5_6;
 	ctrl_info->max_write_raid_1_10_2drive = ~0;
 	ctrl_info->max_write_raid_1_10_3drive = ~0;
@@ -8611,6 +8477,7 @@ static void pqi_remove_ctrl(struct pqi_ctrl_info *ctrl_info)
 		pqi_fail_all_outstanding_requests(ctrl_info);
 		ctrl_info->pqi_mode_enabled = false;
 	}
+	pqi_host_free_buffer(ctrl_info, &ctrl_info->ctrl_log_memory);
 	pqi_unregister_scsi(ctrl_info);
 	if (ctrl_info->pqi_mode_enabled)
 		pqi_revert_to_sis_mode(ctrl_info);
@@ -8636,175 +8503,185 @@ static void pqi_ofa_ctrl_unquiesce(struct pqi_ctrl_info *ctrl_info)
 	pqi_ctrl_unblock_scan(ctrl_info);
 }
 
-static int pqi_ofa_alloc_mem(struct pqi_ctrl_info *ctrl_info, u32 total_size, u32 chunk_size)
-{
-	int i;
-	u32 sg_count;
-	struct device *dev;
-	struct pqi_ofa_memory *ofap;
-	struct pqi_sg_descriptor *mem_descriptor;
-	dma_addr_t dma_handle;
-
-	ofap = ctrl_info->pqi_ofa_mem_virt_addr;
-
-	sg_count = DIV_ROUND_UP(total_size, chunk_size);
-	if (sg_count == 0 || sg_count > PQI_OFA_MAX_SG_DESCRIPTORS)
-		goto out;
-
-	ctrl_info->pqi_ofa_chunk_virt_addr = kmalloc(sg_count * sizeof(void *), GFP_KERNEL);
-	if (!ctrl_info->pqi_ofa_chunk_virt_addr)
-		goto out;
-
-	dev = &ctrl_info->pci_dev->dev;
-
-	for (i = 0; i < sg_count; i++) {
-		ctrl_info->pqi_ofa_chunk_virt_addr[i] =
-			dma_zalloc_coherent(dev, chunk_size, &dma_handle, GFP_KERNEL);
-		if (!ctrl_info->pqi_ofa_chunk_virt_addr[i])
-			goto out_free_chunks;
-		mem_descriptor = &ofap->sg_descriptor[i];
-		put_unaligned_le64((u64)dma_handle, &mem_descriptor->address);
-		put_unaligned_le32(chunk_size, &mem_descriptor->length);
-	}
-
-	put_unaligned_le32(CISS_SG_LAST, &mem_descriptor->flags);
-	put_unaligned_le16(sg_count, &ofap->num_memory_descriptors);
-	put_unaligned_le32(sg_count * chunk_size, &ofap->bytes_allocated);
-
-	return 0;
-
-out_free_chunks:
-	while (--i >= 0) {
-		mem_descriptor = &ofap->sg_descriptor[i];
-		dma_free_coherent(dev, chunk_size,
-			ctrl_info->pqi_ofa_chunk_virt_addr[i],
-			get_unaligned_le64(&mem_descriptor->address));
-	}
-	kfree(ctrl_info->pqi_ofa_chunk_virt_addr);
-
-out:
-	return -ENOMEM;
-}
-
-static int pqi_ofa_alloc_host_buffer(struct pqi_ctrl_info *ctrl_info)
-{
-	u32 total_size;
-	u32 chunk_size;
-	u32 min_chunk_size;
-
-	if (ctrl_info->ofa_bytes_requested == 0)
-		return 0;
-
-	total_size = PAGE_ALIGN(ctrl_info->ofa_bytes_requested);
-	min_chunk_size = DIV_ROUND_UP(total_size, PQI_OFA_MAX_SG_DESCRIPTORS);
-	min_chunk_size = PAGE_ALIGN(min_chunk_size);
-
-	for (chunk_size = total_size; chunk_size >= min_chunk_size;) {
-		if (pqi_ofa_alloc_mem(ctrl_info, total_size, chunk_size) == 0)
-			return 0;
-		chunk_size /= 2;
-		chunk_size = PAGE_ALIGN(chunk_size);
-	}
-
-	return -ENOMEM;
-}
-
-static void pqi_ofa_setup_host_buffer(struct pqi_ctrl_info *ctrl_info)
-{
-	struct device *dev;
-	struct pqi_ofa_memory *ofap;
-
-	dev = &ctrl_info->pci_dev->dev;
-
-	ofap = dma_zalloc_coherent(dev, sizeof(*ofap),
-		&ctrl_info->pqi_ofa_mem_dma_handle, GFP_KERNEL);
-	if (!ofap)
-		return;
-
-	ctrl_info->pqi_ofa_mem_virt_addr = ofap;
-
-	if (pqi_ofa_alloc_host_buffer(ctrl_info) < 0) {
-		dev_err(dev,
-			"failed to allocate host buffer for Online Firmware Activation\n");
-		dma_free_coherent(dev, sizeof(*ofap), ofap, ctrl_info->pqi_ofa_mem_dma_handle);
-		ctrl_info->pqi_ofa_mem_virt_addr = NULL;
-		return;
-	}
-
-	put_unaligned_le16(PQI_OFA_VERSION, &ofap->version);
-	memcpy(&ofap->signature, PQI_OFA_SIGNATURE, sizeof(ofap->signature));
-}
-
-static void pqi_ofa_free_host_buffer(struct pqi_ctrl_info *ctrl_info)
-{
-	unsigned int i;
-	struct device *dev;
-	struct pqi_ofa_memory *ofap;
-	struct pqi_sg_descriptor *mem_descriptor;
-	unsigned int num_memory_descriptors;
-
-	ofap = ctrl_info->pqi_ofa_mem_virt_addr;
-	if (!ofap)
-		return;
-
-	dev = &ctrl_info->pci_dev->dev;
-
-	if (get_unaligned_le32(&ofap->bytes_allocated) == 0)
-		goto out;
-
-	mem_descriptor = ofap->sg_descriptor;
-	num_memory_descriptors =
-		get_unaligned_le16(&ofap->num_memory_descriptors);
-
-	for (i = 0; i < num_memory_descriptors; i++) {
-		dma_free_coherent(dev,
-			get_unaligned_le32(&mem_descriptor[i].length),
-			ctrl_info->pqi_ofa_chunk_virt_addr[i],
-			get_unaligned_le64(&mem_descriptor[i].address));
-	}
-	kfree(ctrl_info->pqi_ofa_chunk_virt_addr);
-
-out:
-	dma_free_coherent(dev, sizeof(*ofap), ofap,
-		ctrl_info->pqi_ofa_mem_dma_handle);
-	ctrl_info->pqi_ofa_mem_virt_addr = NULL;
-}
-
-static int pqi_ofa_host_memory_update(struct pqi_ctrl_info *ctrl_info)
-{
-	u32 buffer_length;
-	struct pqi_vendor_general_request request;
-	struct pqi_ofa_memory *ofap;
-
-	memset(&request, 0, sizeof(request));
-
-	request.header.iu_type = PQI_REQUEST_IU_VENDOR_GENERAL;
-	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH,
-		&request.header.iu_length);
-	put_unaligned_le16(PQI_VENDOR_GENERAL_HOST_MEMORY_UPDATE,
-		&request.function_code);
-
-	ofap = ctrl_info->pqi_ofa_mem_virt_addr;
-
-	if (ofap) {
-		buffer_length = offsetof(struct pqi_ofa_memory, sg_descriptor) +
-			get_unaligned_le16(&ofap->num_memory_descriptors) *
-			sizeof(struct pqi_sg_descriptor);
-
-		put_unaligned_le64((u64)ctrl_info->pqi_ofa_mem_dma_handle,
-			&request.data.ofa_memory_allocation.buffer_address);
-		put_unaligned_le32(buffer_length,
-			&request.data.ofa_memory_allocation.buffer_length);
-	}
-
-	return pqi_submit_raid_request_synchronous(ctrl_info, &request.header, 0, NULL);
-}
-
 static int pqi_ofa_ctrl_restart(struct pqi_ctrl_info *ctrl_info, unsigned int delay_secs)
 {
 	ssleep(delay_secs);
 
 	return pqi_ctrl_init_resume(ctrl_info);
+}
+
+static int pqi_host_alloc_mem(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_host_memory_descriptor *host_memory_descriptor,
+	u32 total_size, u32 chunk_size)
+{
+	int i;
+	u32 sg_count;
+	struct device *dev;
+	struct pqi_host_memory *host_memory;
+	struct pqi_sg_descriptor *mem_descriptor;
+	dma_addr_t dma_handle;
+
+	sg_count = DIV_ROUND_UP(total_size, chunk_size);
+	if (sg_count == 0 || sg_count > PQI_HOST_MAX_SG_DESCRIPTORS)
+		goto out;
+
+	host_memory_descriptor->host_chunk_virt_address = kmalloc(sg_count * sizeof(void *), GFP_KERNEL);
+	if (!host_memory_descriptor->host_chunk_virt_address)
+		goto out;
+
+	dev = &ctrl_info->pci_dev->dev;
+	host_memory = host_memory_descriptor->host_memory;
+
+	for (i = 0; i < sg_count; i++) {
+		host_memory_descriptor->host_chunk_virt_address[i] = dma_zalloc_coherent(dev, chunk_size, &dma_handle, GFP_KERNEL);
+		if (!host_memory_descriptor->host_chunk_virt_address[i])
+			goto out_free_chunks;
+		mem_descriptor = &host_memory->sg_descriptor[i];
+		put_unaligned_le64((u64)dma_handle, &mem_descriptor->address);
+		put_unaligned_le32(chunk_size, &mem_descriptor->length);
+	}
+
+	put_unaligned_le32(CISS_SG_LAST, &mem_descriptor->flags);
+	put_unaligned_le16(sg_count, &host_memory->num_memory_descriptors);
+	put_unaligned_le32(sg_count * chunk_size, &host_memory->bytes_allocated);
+
+	return 0;
+
+out_free_chunks:
+	while (--i >= 0) {
+		mem_descriptor = &host_memory->sg_descriptor[i];
+		dma_free_coherent(dev, chunk_size,
+			host_memory_descriptor->host_chunk_virt_address[i],
+			get_unaligned_le64(&mem_descriptor->address));
+	}
+	kfree(host_memory_descriptor->host_chunk_virt_address);
+out:
+	return -ENOMEM;
+}
+
+static int pqi_host_alloc_buffer(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_host_memory_descriptor *host_memory_descriptor,
+	u32 total_required_size, u32 min_required_size)
+{
+	u32 chunk_size;
+	u32 min_chunk_size;
+
+	if (total_required_size == 0 || min_required_size == 0)
+		return 0;
+
+	total_required_size = PAGE_ALIGN(total_required_size);
+	min_required_size = PAGE_ALIGN(min_required_size);
+	min_chunk_size = DIV_ROUND_UP(total_required_size, PQI_HOST_MAX_SG_DESCRIPTORS);
+	min_chunk_size = PAGE_ALIGN(min_chunk_size);
+
+	while (total_required_size >= min_required_size) {
+		for (chunk_size = total_required_size; chunk_size >= min_chunk_size;) {
+			if (pqi_host_alloc_mem(ctrl_info,
+				host_memory_descriptor, total_required_size,
+				chunk_size) == 0)
+				return 0;
+			chunk_size /= 2;
+			chunk_size = PAGE_ALIGN(chunk_size);
+		}
+		total_required_size /= 2;
+		total_required_size = PAGE_ALIGN(total_required_size);
+	}
+
+	return -ENOMEM;
+}
+
+static void pqi_host_setup_buffer(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_host_memory_descriptor *host_memory_descriptor,
+	u32 total_size, u32 min_size)
+{
+	struct device *dev;
+	struct pqi_host_memory *host_memory;
+
+	dev = &ctrl_info->pci_dev->dev;
+
+	host_memory = dma_zalloc_coherent(dev, sizeof(*host_memory),
+		&host_memory_descriptor->host_memory_dma_handle, GFP_KERNEL);
+	if (!host_memory)
+		return;
+
+	host_memory_descriptor->host_memory = host_memory;
+
+	if (pqi_host_alloc_buffer(ctrl_info, host_memory_descriptor,
+		total_size, min_size) < 0) {
+		dev_err(dev, "failed to allocate firmware usable host buffer\n");
+		dma_free_coherent(dev, sizeof(*host_memory), host_memory,
+			host_memory_descriptor->host_memory_dma_handle);
+		host_memory_descriptor->host_memory = NULL;
+		return;
+	}
+}
+
+static void pqi_host_free_buffer(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_host_memory_descriptor *host_memory_descriptor)
+{
+	unsigned int i;
+	struct device *dev;
+	struct pqi_host_memory *host_memory;
+	struct pqi_sg_descriptor *mem_descriptor;
+	unsigned int num_memory_descriptors;
+
+	host_memory = host_memory_descriptor->host_memory;
+	if (!host_memory)
+		return;
+
+	dev = &ctrl_info->pci_dev->dev;
+
+	if (get_unaligned_le32(&host_memory->bytes_allocated) == 0)
+		goto out;
+
+	mem_descriptor = host_memory->sg_descriptor;
+	num_memory_descriptors = get_unaligned_le16(&host_memory->num_memory_descriptors);
+
+	for (i = 0; i < num_memory_descriptors; i++) {
+		dma_free_coherent(dev,
+			get_unaligned_le32(&mem_descriptor[i].length),
+			host_memory_descriptor->host_chunk_virt_address[i],
+			get_unaligned_le64(&mem_descriptor[i].address));
+	}
+	kfree(host_memory_descriptor->host_chunk_virt_address);
+
+out:
+	dma_free_coherent(dev, sizeof(*host_memory), host_memory,
+		host_memory_descriptor->host_memory_dma_handle);
+	host_memory_descriptor->host_memory = NULL;
+}
+
+static int pqi_host_memory_update(struct pqi_ctrl_info *ctrl_info,
+	struct pqi_host_memory_descriptor *host_memory_descriptor,
+	u16 function_code)
+{
+	u32 buffer_length;
+	struct pqi_vendor_general_request request;
+	struct pqi_host_memory *host_memory;
+
+	memset(&request, 0, sizeof(request));
+
+	request.header.iu_type = PQI_REQUEST_IU_VENDOR_GENERAL;
+	put_unaligned_le16(sizeof(request) - PQI_REQUEST_HEADER_LENGTH, &request.header.iu_length);
+	put_unaligned_le16(function_code, &request.function_code);
+
+	host_memory = host_memory_descriptor->host_memory;
+
+	if (host_memory) {
+		buffer_length = offsetof(struct pqi_host_memory, sg_descriptor) + get_unaligned_le16(&host_memory->num_memory_descriptors) * sizeof(struct pqi_sg_descriptor);
+		put_unaligned_le64((u64)host_memory_descriptor->host_memory_dma_handle, &request.data.host_memory_allocation.buffer_address);
+		put_unaligned_le32(buffer_length, &request.data.host_memory_allocation.buffer_length);
+
+		if (function_code == PQI_VENDOR_GENERAL_OFA_MEMORY_UPDATE) {
+			put_unaligned_le16(PQI_OFA_VERSION, &host_memory->version);
+			memcpy(&host_memory->signature, PQI_OFA_SIGNATURE, sizeof(host_memory->signature));
+		} else if (function_code == PQI_VENDOR_GENERAL_CTRL_LOG_MEMORY_UPDATE) {
+			put_unaligned_le16(PQI_CTRL_LOG_VERSION, &host_memory->version);
+			memcpy(&host_memory->signature, PQI_CTRL_LOG_SIGNATURE, sizeof(host_memory->signature));
+		}
+	}
+
+	return pqi_submit_raid_request_synchronous(ctrl_info, &request.header, 0, NULL);
 }
 
 static struct pqi_raid_error_info pqi_ctrl_offline_raid_error_info = {
@@ -8835,12 +8712,10 @@ static void pqi_fail_all_outstanding_requests(struct pqi_ctrl_info *ctrl_info)
 			}
 		} else {
 			io_request->status = -ENXIO;
-			io_request->error_info =
-				&pqi_ctrl_offline_raid_error_info;
+			io_request->error_info = &pqi_ctrl_offline_raid_error_info;
 		}
 
-		io_request->io_complete_callback(io_request,
-			io_request->context);
+		io_request->io_complete_callback(io_request, io_request->context);
 	}
 }
 
@@ -8864,6 +8739,52 @@ static void pqi_ctrl_offline_worker(struct work_struct *work)
 	pqi_take_ctrl_offline_deferred(ctrl_info);
 }
 
+static char *pqi_ctrl_shutdown_reason_to_string(enum pqi_ctrl_shutdown_reason ctrl_shutdown_reason)
+{
+	char *string;
+
+	switch (ctrl_shutdown_reason) {
+	case PQI_IQ_NOT_DRAINED_TIMEOUT:
+		string = "inbound queue not drained timeout";
+		break;
+	case PQI_LUN_RESET_TIMEOUT:
+		string = "LUN reset timeout";
+		break;
+	case PQI_IO_PENDING_POST_LUN_RESET_TIMEOUT:
+		string = "I/O pending timeout after LUN reset";
+		break;
+	case PQI_NO_HEARTBEAT:
+		string = "no controller heartbeat detected";
+		break;
+	case PQI_FIRMWARE_KERNEL_NOT_UP:
+		string = "firmware kernel not ready";
+		break;
+	case PQI_OFA_RESPONSE_TIMEOUT:
+		string = "OFA response timeout";
+		break;
+	case PQI_INVALID_REQ_ID:
+		string = "invalid request ID";
+		break;
+	case PQI_UNMATCHED_REQ_ID:
+		string = "unmatched request ID";
+		break;
+	case PQI_IO_PI_OUT_OF_RANGE:
+		string = "I/O queue producer index out of range";
+		break;
+	case PQI_EVENT_PI_OUT_OF_RANGE:
+		string = "event queue producer index out of range";
+		break;
+	case PQI_UNEXPECTED_IU_TYPE:
+		string = "unexpected IU type";
+		break;
+	default:
+		string = "unknown reason";
+		break;
+	}
+
+	return string;
+}
+
 static void pqi_take_ctrl_offline(struct pqi_ctrl_info *ctrl_info,
 	enum pqi_ctrl_shutdown_reason ctrl_shutdown_reason)
 {
@@ -8876,7 +8797,9 @@ static void pqi_take_ctrl_offline(struct pqi_ctrl_info *ctrl_info,
 	if (!pqi_disable_ctrl_shutdown)
 		sis_shutdown_ctrl(ctrl_info, ctrl_shutdown_reason);
 	pci_disable_device(ctrl_info->pci_dev);
-	dev_err(&ctrl_info->pci_dev->dev, "controller offline\n");
+	dev_err(&ctrl_info->pci_dev->dev,
+		"controller offline: reason code 0x%x (%s)\n",
+		ctrl_shutdown_reason, pqi_ctrl_shutdown_reason_to_string(ctrl_shutdown_reason));
 	schedule_work(&ctrl_info->ctrl_offline_work);
 }
 
@@ -8928,6 +8851,7 @@ static int pqi_pci_probe(struct pci_dev *pci_dev,
 			"failed to allocate controller info block\n");
 		return -ENOMEM;
 	}
+	ctrl_info->numa_node = node;
 
 	ctrl_info->pci_dev = pci_dev;
 
@@ -8973,8 +8897,7 @@ static void pqi_pci_remove(struct pci_dev *pci_dev)
 	pqi_remove_ctrl(ctrl_info);
 }
 
-static void pqi_dump_request(struct pqi_ctrl_info *ctrl_info,
-				struct pqi_io_request *io_request)
+static void pqi_dump_request(struct pqi_ctrl_info *ctrl_info, struct pqi_io_request *io_request)
 {
 	struct scsi_cmnd *scmd;
 
@@ -9056,7 +8979,7 @@ static void pqi_shutdown(struct pci_dev *pci_dev)
 	rc = pqi_flush_cache(ctrl_info, shutdown_event);
 	if (rc)
 		dev_err(&pci_dev->dev,
-			"unable to flush controller cache\n");
+			"unable to flush controller cache during shutdown\n");
 
 	pqi_crash_if_pending_command(ctrl_info);
 	pqi_reset(ctrl_info);
@@ -9070,8 +8993,7 @@ static void pqi_process_lockup_action_param(void)
 		return;
 
 	for (i = 0; i < ARRAY_SIZE(pqi_lockup_actions); i++) {
-		if (strcmp(pqi_lockup_action_param,
-			pqi_lockup_actions[i].name) == 0) {
+		if (strcmp(pqi_lockup_action_param, pqi_lockup_actions[i].name) == 0) {
 			pqi_lockup_action = pqi_lockup_actions[i].action;
 			return;
 		}
@@ -9902,35 +9824,35 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x544A)
+			       PCI_VENDOR_ID_ZTE, 0x544a)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x544B)
+			       PCI_VENDOR_ID_ZTE, 0x544b)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x544D)
+			       PCI_VENDOR_ID_ZTE, 0x544d)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x544E)
+			       PCI_VENDOR_ID_ZTE, 0x544e)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x544F)
+			       PCI_VENDOR_ID_ZTE, 0x544f)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x54DA)
+			       PCI_VENDOR_ID_ZTE, 0x54da)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x54DB)
+			       PCI_VENDOR_ID_ZTE, 0x54db)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_ZTE, 0x54DC)
+			       PCI_VENDOR_ID_ZTE, 0x54dc)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
@@ -9986,63 +9908,63 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				PCI_VENDOR_ID_IBM, 0x0718)
+			       PCI_VENDOR_ID_IBM, 0x0718)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1e93, 0x1000)
+			       0x1e93, 0x1000)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1e93, 0x1001)
+			       0x1e93, 0x1001)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1e93, 0x1002)
+			       0x1e93, 0x1002)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1e93, 0x1005)
+			       0x1e93, 0x1005)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1001)
+			       0x1f51, 0x1001)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1002)
+			       0x1f51, 0x1002)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1003)
+			       0x1f51, 0x1003)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1004)
+			       0x1f51, 0x1004)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1005)
+			       0x1f51, 0x1005)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1006)
+			       0x1f51, 0x1006)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1007)
+			       0x1f51, 0x1007)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1008)
+			       0x1f51, 0x1008)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x1009)
+			       0x1f51, 0x1009)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-				0x1f51, 0x100A)
+			       0x1f51, 0x100a)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
@@ -10098,503 +10020,277 @@ module_exit(pqi_cleanup);
 
 static void pqi_verify_structures(void)
 {
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_host_to_ctrl_doorbell) != 0x20);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_interrupt_mask) != 0x34);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_ctrl_to_host_doorbell) != 0x9c);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_ctrl_to_host_doorbell_clear) != 0xa0);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_driver_scratch) != 0xb0);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_product_identifier) != 0xb4);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_firmware_status) != 0xbc);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_ctrl_shutdown_reason_code) != 0xcc);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		sis_mailbox) != 0x1000);
-	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers,
-		pqi_registers) != 0x4000);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_host_to_ctrl_doorbell) != 0x20);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_interrupt_mask) != 0x34);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_ctrl_to_host_doorbell) != 0x9c);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_ctrl_to_host_doorbell_clear) != 0xa0);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_driver_scratch) != 0xb0);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_product_identifier) != 0xb4);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_firmware_status) != 0xbc);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_ctrl_shutdown_reason_code) != 0xcc);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, sis_mailbox) != 0x1000);
+	BUILD_BUG_ON(offsetof(struct pqi_ctrl_registers, pqi_registers) != 0x4000);
 
-	BUILD_BUG_ON(offsetof(struct pqi_iu_header,
-		iu_type) != 0x0);
-	BUILD_BUG_ON(offsetof(struct pqi_iu_header,
-		iu_length) != 0x2);
-	BUILD_BUG_ON(offsetof(struct pqi_iu_header,
-		response_queue_id) != 0x4);
-	BUILD_BUG_ON(offsetof(struct pqi_iu_header,
-		driver_flags) != 0x6);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_header, iu_type) != 0x0);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_header, iu_length) != 0x2);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_header, response_queue_id) != 0x4);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_header, driver_flags) != 0x6);
 	BUILD_BUG_ON(sizeof(struct pqi_iu_header) != 0x8);
 
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		status) != 0x0);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		service_response) != 0x1);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		data_present) != 0x2);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		reserved) != 0x3);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		residual_count) != 0x4);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		data_length) != 0x8);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		reserved1) != 0xa);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info,
-		data) != 0xc);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, status) != 0x0);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, service_response) != 0x1);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, data_present) != 0x2);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, reserved) != 0x3);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, residual_count) != 0x4);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, data_length) != 0x8);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, reserved1) != 0xa);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_error_info, data) != 0xc);
 	BUILD_BUG_ON(sizeof(struct pqi_aio_error_info) != 0x10c);
 
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		data_in_result) != 0x0);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		data_out_result) != 0x1);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		reserved) != 0x2);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		status) != 0x5);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		status_qualifier) != 0x6);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		sense_data_length) != 0x8);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		response_data_length) != 0xa);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		data_in_transferred) != 0xc);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		data_out_transferred) != 0x10);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info,
-		data) != 0x14);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, data_in_result) != 0x0);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, data_out_result) != 0x1);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, reserved) != 0x2);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, status) != 0x5);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, status_qualifier) != 0x6);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, sense_data_length) != 0x8);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, response_data_length) != 0xa);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, data_in_transferred) != 0xc);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, data_out_transferred) != 0x10);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_error_info, data) != 0x14);
 	BUILD_BUG_ON(sizeof(struct pqi_raid_error_info) != 0x114);
 
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		signature) != 0x0);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		function_and_status_code) != 0x8);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		max_admin_iq_elements) != 0x10);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		max_admin_oq_elements) != 0x11);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_iq_element_length) != 0x12);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_oq_element_length) != 0x13);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		max_reset_timeout) != 0x14);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		legacy_intx_status) != 0x18);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		legacy_intx_mask_set) != 0x1c);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		legacy_intx_mask_clear) != 0x20);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		device_status) != 0x40);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_iq_pi_offset) != 0x48);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_oq_ci_offset) != 0x50);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_iq_element_array_addr) != 0x58);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_oq_element_array_addr) != 0x60);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_iq_ci_addr) != 0x68);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_oq_pi_addr) != 0x70);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_iq_num_elements) != 0x78);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_oq_num_elements) != 0x79);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		admin_queue_int_msg_num) != 0x7a);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		device_error) != 0x80);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		error_details) != 0x88);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		device_reset) != 0x90);
-	BUILD_BUG_ON(offsetof(struct pqi_device_registers,
-		power_action) != 0x94);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, signature) != 0x0);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, function_and_status_code) != 0x8);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, max_admin_iq_elements) != 0x10);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, max_admin_oq_elements) != 0x11);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_iq_element_length) != 0x12);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_oq_element_length) != 0x13);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, max_reset_timeout) != 0x14);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, legacy_intx_status) != 0x18);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, legacy_intx_mask_set) != 0x1c);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, legacy_intx_mask_clear) != 0x20);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, device_status) != 0x40);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_iq_pi_offset) != 0x48);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_oq_ci_offset) != 0x50);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_iq_element_array_addr) != 0x58);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_oq_element_array_addr) != 0x60);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_iq_ci_addr) != 0x68);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_oq_pi_addr) != 0x70);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_iq_num_elements) != 0x78);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_oq_num_elements) != 0x79);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, admin_queue_int_msg_num) != 0x7a);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, device_error) != 0x80);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, error_details) != 0x88);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, device_reset) != 0x90);
+	BUILD_BUG_ON(offsetof(struct pqi_device_registers, power_action) != 0x94);
 	BUILD_BUG_ON(sizeof(struct pqi_device_registers) != 0x100);
 
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		header.driver_flags) != 6);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		function_code) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.report_device_capability.buffer_length) != 44);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.report_device_capability.sg_descriptor) != 48);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.queue_id) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.element_array_addr) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.ci_addr) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.num_elements) != 32);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.element_length) != 34);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_iq.queue_protocol) != 36);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.queue_id) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.element_array_addr) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.pi_addr) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.num_elements) != 32);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.element_length) != 34);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.queue_protocol) != 36);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.int_msg_num) != 40);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.coalescing_count) != 42);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.min_coalescing_time) != 44);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.create_operational_oq.max_coalescing_time) != 48);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request,
-		data.delete_operational_queue.queue_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, header.driver_flags) != 6);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, function_code) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.report_device_capability.buffer_length) != 44);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.report_device_capability.sg_descriptor) != 48);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.queue_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.element_array_addr) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.ci_addr) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.num_elements) != 32);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.element_length) != 34);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_iq.queue_protocol) != 36);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.queue_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.element_array_addr) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.pi_addr) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.num_elements) != 32);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.element_length) != 34);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.queue_protocol) != 36);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.int_msg_num) != 40);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.coalescing_count) != 42);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.min_coalescing_time) != 44);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.create_operational_oq.max_coalescing_time) != 48);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_request, data.delete_operational_queue.queue_id) != 12);
 	BUILD_BUG_ON(sizeof(struct pqi_general_admin_request) != 64);
-	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request,
-		data.create_operational_iq) != 64 - 11);
-	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request,
-		data.create_operational_oq) != 64 - 11);
-	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request,
-		data.delete_operational_queue) != 64 - 11);
+	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request, data.create_operational_iq) != 64 - 11);
+	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request, data.create_operational_oq) != 64 - 11);
+	BUILD_BUG_ON(FIELD_SIZEOF(struct pqi_general_admin_request, data.delete_operational_queue) != 64 - 11);
 
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		header.driver_flags) != 6);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		function_code) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		status) != 11);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		data.create_operational_iq.status_descriptor) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		data.create_operational_iq.iq_pi_offset) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		data.create_operational_oq.status_descriptor) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response,
-		data.create_operational_oq.oq_ci_offset) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, header.driver_flags) != 6);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, function_code) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, status) != 11);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, data.create_operational_iq.status_descriptor) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, data.create_operational_iq.iq_pi_offset) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, data.create_operational_oq.status_descriptor) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_admin_response, data.create_operational_oq.oq_ci_offset) != 16);
 	BUILD_BUG_ON(sizeof(struct pqi_general_admin_response) != 64);
 
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		header.response_queue_id) != 4);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		header.driver_flags) != 6);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		nexus_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		buffer_length) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		lun_number) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		protocol_specific) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		error_index) != 27);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		cdb) != 32);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		timeout) != 60);
-	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request,
-		sg_descriptors) != 64);
-	BUILD_BUG_ON(sizeof(struct pqi_raid_path_request) !=
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, header.response_queue_id) != 4);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, header.driver_flags) != 6);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, nexus_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, buffer_length) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, lun_number) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, protocol_specific) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, error_index) != 27);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, cdb) != 32);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, timeout) != 60);
+	BUILD_BUG_ON(offsetof(struct pqi_raid_path_request, sg_descriptors) != 64);
+	BUILD_BUG_ON(sizeof(struct pqi_raid_path_request) != PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
 
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		header.response_queue_id) != 4);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		header.driver_flags) != 6);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		nexus_id) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		buffer_length) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		data_encryption_key_index) != 22);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		encrypt_tweak_lower) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		encrypt_tweak_upper) != 28);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		cdb) != 32);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		error_index) != 48);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		num_sg_descriptors) != 50);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		cdb_length) != 51);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		lun_number) != 52);
-	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request,
-		sg_descriptors) != 64);
-	BUILD_BUG_ON(sizeof(struct pqi_aio_path_request) !=
-		PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, header.response_queue_id) != 4);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, header.driver_flags) != 6);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, nexus_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, buffer_length) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, data_encryption_key_index) != 22);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, encrypt_tweak_lower) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, encrypt_tweak_upper) != 28);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, cdb) != 32);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, error_index) != 48);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, num_sg_descriptors) != 50);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, cdb_length) != 51);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, lun_number) != 52);
+	BUILD_BUG_ON(offsetof(struct pqi_aio_path_request, sg_descriptors) != 64);
+	BUILD_BUG_ON(sizeof(struct pqi_aio_path_request) != PQI_OPERATIONAL_IQ_ELEMENT_LENGTH);
 
-	BUILD_BUG_ON(offsetof(struct pqi_io_response,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_io_response,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_io_response,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_io_response,
-		error_index) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_io_response, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_io_response, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_io_response, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_io_response, error_index) != 10);
 
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		header.response_queue_id) != 4);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		data.report_event_configuration.buffer_length) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		data.report_event_configuration.sg_descriptors) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		data.set_event_configuration.global_event_oq_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		data.set_event_configuration.buffer_length) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_general_management_request,
-		data.set_event_configuration.sg_descriptors) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, header.response_queue_id) != 4);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, data.report_event_configuration.buffer_length) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, data.report_event_configuration.sg_descriptors) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, data.set_event_configuration.global_event_oq_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, data.set_event_configuration.buffer_length) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_general_management_request, data.set_event_configuration.sg_descriptors) != 16);
 
-	BUILD_BUG_ON(offsetof(struct pqi_iu_layer_descriptor,
-		max_inbound_iu_length) != 6);
-	BUILD_BUG_ON(offsetof(struct pqi_iu_layer_descriptor,
-		max_outbound_iu_length) != 14);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_layer_descriptor, max_inbound_iu_length) != 6);
+	BUILD_BUG_ON(offsetof(struct pqi_iu_layer_descriptor, max_outbound_iu_length) != 14);
 	BUILD_BUG_ON(sizeof(struct pqi_iu_layer_descriptor) != 16);
 
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		data_length) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		iq_arbitration_priority_support_bitmask) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		maximum_aw_a) != 9);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		maximum_aw_b) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		maximum_aw_c) != 11);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_inbound_queues) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_elements_per_iq) != 18);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_iq_element_length) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		min_iq_element_length) != 26);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_outbound_queues) != 30);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_elements_per_oq) != 32);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		intr_coalescing_time_granularity) != 34);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		max_oq_element_length) != 36);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		min_oq_element_length) != 38);
-	BUILD_BUG_ON(offsetof(struct pqi_device_capability,
-		iu_layer_descriptors) != 64);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, data_length) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, iq_arbitration_priority_support_bitmask) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, maximum_aw_a) != 9);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, maximum_aw_b) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, maximum_aw_c) != 11);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_inbound_queues) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_elements_per_iq) != 18);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_iq_element_length) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, min_iq_element_length) != 26);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_outbound_queues) != 30);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_elements_per_oq) != 32);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, intr_coalescing_time_granularity) != 34);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, max_oq_element_length) != 36);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, min_oq_element_length) != 38);
+	BUILD_BUG_ON(offsetof(struct pqi_device_capability, iu_layer_descriptors) != 64);
 	BUILD_BUG_ON(sizeof(struct pqi_device_capability) != 576);
 
-	BUILD_BUG_ON(offsetof(struct pqi_event_descriptor,
-		event_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_event_descriptor,
-		oq_id) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_event_descriptor, event_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_event_descriptor, oq_id) != 2);
 	BUILD_BUG_ON(sizeof(struct pqi_event_descriptor) != 4);
 
-	BUILD_BUG_ON(offsetof(struct pqi_event_config,
-		num_event_descriptors) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_event_config,
-		descriptors) != 4);
+	BUILD_BUG_ON(offsetof(struct pqi_event_config, num_event_descriptors) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_event_config, descriptors) != 4);
 
-	BUILD_BUG_ON(PQI_NUM_SUPPORTED_EVENTS !=
-		ARRAY_SIZE(pqi_supported_event_types));
+	BUILD_BUG_ON(PQI_NUM_SUPPORTED_EVENTS != ARRAY_SIZE(pqi_supported_event_types));
 
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		event_type) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		event_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		additional_event_id) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_event_response,
-		data) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, event_type) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, event_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, additional_event_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_event_response, data) != 16);
 	BUILD_BUG_ON(sizeof(struct pqi_event_response) != 32);
 
-	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request,
-		event_type) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request,
-		event_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request,
-		additional_event_id) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request, event_type) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request, event_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_event_acknowledge_request, additional_event_id) != 12);
 	BUILD_BUG_ON(sizeof(struct pqi_event_acknowledge_request) != 16);
 
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		nexus_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		timeout) != 14);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		lun_number) != 16);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		protocol_specific) != 24);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		outbound_queue_id_to_manage) != 26);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		request_id_to_manage) != 28);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_request,
-		task_management_function) != 30);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, nexus_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, timeout) != 14);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, lun_number) != 16);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, protocol_specific) != 24);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, outbound_queue_id_to_manage) != 26);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, request_id_to_manage) != 28);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_request, task_management_function) != 30);
 	BUILD_BUG_ON(sizeof(struct pqi_task_management_request) != 32);
 
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		header.iu_type) != 0);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		header.iu_length) != 2);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		request_id) != 8);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		nexus_id) != 10);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		additional_response_info) != 12);
-	BUILD_BUG_ON(offsetof(struct pqi_task_management_response,
-		response_code) != 15);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, header.iu_type) != 0);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, header.iu_length) != 2);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, request_id) != 8);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, nexus_id) != 10);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, additional_response_info) != 12);
+	BUILD_BUG_ON(offsetof(struct pqi_task_management_response, response_code) != 15);
 	BUILD_BUG_ON(sizeof(struct pqi_task_management_response) != 16);
 
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		configured_logical_drive_count) != 0);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		configuration_signature) != 1);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		firmware_version_short) != 5);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		extended_logical_unit_count) != 154);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		firmware_build_number) != 190);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		vendor_id) != 200);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		product_id) != 208);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		extra_controller_flags) != 286);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		controller_mode) != 292);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		spare_part_number) != 293);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_controller,
-		firmware_version_long) != 325);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, configured_logical_drive_count) != 0);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, configuration_signature) != 1);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, firmware_version_short) != 5);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, extended_logical_unit_count) != 154);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, firmware_build_number) != 190);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, vendor_id) != 200);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, product_id) != 208);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, extra_controller_flags) != 286);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, controller_mode) != 292);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, spare_part_number) != 293);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_controller, firmware_version_long) != 325);
 
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		phys_bay_in_box) != 115);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		device_type) != 120);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		redundant_path_present_map) != 1736);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		active_path_number) != 1738);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		alternate_paths_phys_connector) != 1739);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		alternate_paths_phys_box_on_port) != 1755);
-	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device,
-		current_queue_depth_limit) != 1796);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, phys_bay_in_box) != 115);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, device_type) != 120);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, redundant_path_present_map) != 1736);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, active_path_number) != 1738);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, alternate_paths_phys_connector) != 1739);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, alternate_paths_phys_box_on_port) != 1755);
+	BUILD_BUG_ON(offsetof(struct bmic_identify_physical_device, current_queue_depth_limit) != 1796);
 	BUILD_BUG_ON(sizeof(struct bmic_identify_physical_device) != 2560);
 
 	BUILD_BUG_ON(sizeof(struct bmic_sense_feature_buffer_header) != 4);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header,
-		page_code) != 0);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header,
-		subpage_code) != 1);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header,
-		buffer_length) != 2);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header, page_code) != 0);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header, subpage_code) != 1);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_buffer_header, buffer_length) != 2);
 
 	BUILD_BUG_ON(sizeof(struct bmic_sense_feature_page_header) != 4);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header,
-		page_code) != 0);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header,
-		subpage_code) != 1);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header,
-		page_length) != 2);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header, page_code) != 0);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header, subpage_code) != 1);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_page_header, page_length) != 2);
 
-	BUILD_BUG_ON(sizeof(struct bmic_sense_feature_io_page_aio_subpage)
-		!= 18);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		header) != 0);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		firmware_read_support) != 4);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		driver_read_support) != 5);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		firmware_write_support) != 6);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		driver_write_support) != 7);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		max_transfer_encrypted_sas_sata) != 8);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		max_transfer_encrypted_nvme) != 10);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		max_write_raid_5_6) != 12);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		max_write_raid_1_10_2drive) != 14);
-	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage,
-		max_write_raid_1_10_3drive) != 16);
+	BUILD_BUG_ON(sizeof(struct bmic_sense_feature_io_page_aio_subpage) != 18);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, header) != 0);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, firmware_read_support) != 4);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, driver_read_support) != 5);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, firmware_write_support) != 6);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, driver_write_support) != 7);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, max_transfer_encrypted_sas_sata) != 8);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, max_transfer_encrypted_nvme) != 10);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, max_write_raid_5_6) != 12);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, max_write_raid_1_10_2drive) != 14);
+	BUILD_BUG_ON(offsetof(struct bmic_sense_feature_io_page_aio_subpage, max_write_raid_1_10_3drive) != 16);
 
 	BUILD_BUG_ON(PQI_ADMIN_IQ_NUM_ELEMENTS > 255);
 	BUILD_BUG_ON(PQI_ADMIN_OQ_NUM_ELEMENTS > 255);
-	BUILD_BUG_ON(PQI_ADMIN_IQ_ELEMENT_LENGTH %
-		PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
-	BUILD_BUG_ON(PQI_ADMIN_OQ_ELEMENT_LENGTH %
-		PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
+	BUILD_BUG_ON(PQI_ADMIN_IQ_ELEMENT_LENGTH % PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
+	BUILD_BUG_ON(PQI_ADMIN_OQ_ELEMENT_LENGTH % PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
 	BUILD_BUG_ON(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH > 1048560);
-	BUILD_BUG_ON(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH %
-		PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
+	BUILD_BUG_ON(PQI_OPERATIONAL_IQ_ELEMENT_LENGTH % PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
 	BUILD_BUG_ON(PQI_OPERATIONAL_OQ_ELEMENT_LENGTH > 1048560);
-	BUILD_BUG_ON(PQI_OPERATIONAL_OQ_ELEMENT_LENGTH %
-		PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
+	BUILD_BUG_ON(PQI_OPERATIONAL_OQ_ELEMENT_LENGTH % PQI_QUEUE_ELEMENT_LENGTH_ALIGNMENT != 0);
 
 	BUILD_BUG_ON(PQI_RESERVED_IO_SLOTS >= PQI_MAX_OUTSTANDING_REQUESTS);
-	BUILD_BUG_ON(PQI_RESERVED_IO_SLOTS >=
-		PQI_MAX_OUTSTANDING_REQUESTS_KDUMP);
+	BUILD_BUG_ON(PQI_RESERVED_IO_SLOTS >= PQI_MAX_OUTSTANDING_REQUESTS_KDUMP);
 }

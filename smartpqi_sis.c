@@ -1,6 +1,6 @@
 /*
  *    driver for Microchip PQI-based storage controllers
- *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2019-2023 Microchip Technology Inc. and its subsidiaries
  *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
@@ -37,6 +37,7 @@
 #define SIS_ENABLE_INTX				0x80
 #define SIS_SOFT_RESET				0x100
 #define SIS_CMD_READY				0x200
+#define SIS_NOTIFY_KDUMP			0x400
 #define SIS_TRIGGER_SHUTDOWN			0x800000
 #define SIS_PQI_RESET_QUIESCE			0x1000000
 
@@ -60,6 +61,8 @@
 #define SIS_BASE_STRUCT_ALIGNMENT		16
 
 #define SIS_CTRL_KERNEL_FW_TRIAGE		0x3
+#define SIS_CTRL_KERNEL_CTRL_LOGGING		0x4
+#define SIS_CTRL_KERNEL_CTRL_LOGGING_STATUS	0x18
 #define SIS_CTRL_KERNEL_UP			0x80
 #define SIS_CTRL_KERNEL_PANIC			0x100
 #if TORTUGA
@@ -75,6 +78,13 @@ enum sis_fw_triage_status {
 	FW_TRIAGE_STARTED,
 	FW_TRIAGE_COND_INVALID,
 	FW_TRIAGE_COMPLETED
+};
+
+enum sis_ctrl_logging_status {
+	CTRL_LOGGING_NOT_STARTED = 0,
+	CTRL_LOGGING_STARTED,
+	CTRL_LOGGING_COND_INVALID,
+	CTRL_LOGGING_COMPLETED
 };
 
 #pragma pack(1)
@@ -135,14 +145,12 @@ static int sis_wait_for_ctrl_ready_with_timeout(struct pqi_ctrl_info *ctrl_info,
 
 int sis_wait_for_ctrl_ready(struct pqi_ctrl_info *ctrl_info)
 {
-	return sis_wait_for_ctrl_ready_with_timeout(ctrl_info,
-		sis_ctrl_ready_timeout_secs);
+	return sis_wait_for_ctrl_ready_with_timeout(ctrl_info, sis_ctrl_ready_timeout_secs);
 }
 
 int sis_wait_for_ctrl_ready_resume(struct pqi_ctrl_info *ctrl_info)
 {
-	return sis_wait_for_ctrl_ready_with_timeout(ctrl_info,
-		SIS_CTRL_READY_RESUME_TIMEOUT_SECS);
+	return sis_wait_for_ctrl_ready_with_timeout(ctrl_info, SIS_CTRL_READY_RESUME_TIMEOUT_SECS);
 }
 
 bool sis_is_firmware_running(struct pqi_ctrl_info *ctrl_info)
@@ -167,8 +175,7 @@ bool sis_is_firmware_running(struct pqi_ctrl_info *ctrl_info)
 
 bool sis_is_kernel_up(struct pqi_ctrl_info *ctrl_info)
 {
-	return readl(&ctrl_info->registers->sis_firmware_status) &
-		SIS_CTRL_KERNEL_UP;
+	return readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_UP;
 }
 
 u32 sis_get_product_id(struct pqi_ctrl_info *ctrl_info)
@@ -203,8 +210,7 @@ static int sis_send_sync_cmd(struct pqi_ctrl_info *ctrl_info,
 		writel(params->mailbox[i], &registers->sis_mailbox[i]);
 
 	/* Clear the command doorbell. */
-	writel(SIS_CLEAR_CTRL_TO_HOST_DOORBELL,
-		&registers->sis_ctrl_to_host_doorbell_clear);
+	writel(SIS_CLEAR_CTRL_TO_HOST_DOORBELL, &registers->sis_ctrl_to_host_doorbell_clear);
 
 	/* Disable doorbell interrupts by masking all interrupts. */
 	writel(~0, &registers->sis_interrupt_mask);
@@ -267,8 +273,7 @@ int sis_get_ctrl_properties(struct pqi_ctrl_info *ctrl_info)
 
 	memset(&params, 0, sizeof(params));
 
-	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_GET_ADAPTER_PROPERTIES,
-		&params);
+	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_GET_ADAPTER_PROPERTIES, &params);
 	if (rc)
 		return rc;
 
@@ -279,8 +284,7 @@ int sis_get_ctrl_properties(struct pqi_ctrl_info *ctrl_info)
 
 	extended_properties = params.mailbox[4];
 
-	if ((extended_properties & SIS_REQUIRED_EXTENDED_PROPERTIES) !=
-		SIS_REQUIRED_EXTENDED_PROPERTIES)
+	if ((extended_properties & SIS_REQUIRED_EXTENDED_PROPERTIES) != SIS_REQUIRED_EXTENDED_PROPERTIES)
 		return -ENODEV;
 
 	if (extended_properties & SIS_PQI_RESET_QUIESCE_SUPPORTED)
@@ -296,8 +300,7 @@ int sis_get_pqi_capabilities(struct pqi_ctrl_info *ctrl_info)
 
 	memset(&params, 0, sizeof(params));
 
-	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_GET_PQI_CAPABILITIES,
-		&params);
+	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_GET_PQI_CAPABILITIES, &params);
 	if (rc)
 		return rc;
 
@@ -319,27 +322,20 @@ int sis_init_base_struct_addr(struct pqi_ctrl_info *ctrl_info)
 	unsigned long error_buffer_paddr;
 	dma_addr_t bus_address;
 
-	base_struct_unaligned = kzalloc(sizeof(*base_struct)
-		+ SIS_BASE_STRUCT_ALIGNMENT - 1, GFP_KERNEL);
+	base_struct_unaligned = kzalloc(sizeof(*base_struct) + SIS_BASE_STRUCT_ALIGNMENT - 1, GFP_KERNEL);
 	if (!base_struct_unaligned)
 		return -ENOMEM;
 
-	base_struct = PTR_ALIGN(base_struct_unaligned,
-		SIS_BASE_STRUCT_ALIGNMENT);
+	base_struct = PTR_ALIGN(base_struct_unaligned, SIS_BASE_STRUCT_ALIGNMENT);
 	error_buffer_paddr = (unsigned long)ctrl_info->error_buffer_dma_handle;
 
 	put_unaligned_le32(SIS_BASE_STRUCT_REVISION, &base_struct->revision);
-	put_unaligned_le32(lower_32_bits(error_buffer_paddr),
-		&base_struct->error_buffer_paddr_low);
-	put_unaligned_le32(upper_32_bits(error_buffer_paddr),
-		&base_struct->error_buffer_paddr_high);
-	put_unaligned_le32(PQI_ERROR_BUFFER_ELEMENT_LENGTH,
-		&base_struct->error_buffer_element_length);
-	put_unaligned_le32(ctrl_info->max_io_slots,
-		&base_struct->error_buffer_num_elements);
+	put_unaligned_le32(lower_32_bits(error_buffer_paddr), &base_struct->error_buffer_paddr_low);
+	put_unaligned_le32(upper_32_bits(error_buffer_paddr), &base_struct->error_buffer_paddr_high);
+	put_unaligned_le32(PQI_ERROR_BUFFER_ELEMENT_LENGTH, &base_struct->error_buffer_element_length);
+	put_unaligned_le32(ctrl_info->max_io_slots, &base_struct->error_buffer_num_elements);
 
-	bus_address = dma_map_single(&ctrl_info->pci_dev->dev, base_struct,
-		sizeof(*base_struct), DMA_TO_DEVICE);
+	bus_address = dma_map_single(&ctrl_info->pci_dev->dev, base_struct, sizeof(*base_struct), DMA_TO_DEVICE);
 	if (dma_mapping_error(&ctrl_info->pci_dev->dev, bus_address)) {
 		rc = -ENOMEM;
 		goto out;
@@ -350,11 +346,9 @@ int sis_init_base_struct_addr(struct pqi_ctrl_info *ctrl_info)
 	params.mailbox[2] = upper_32_bits((u64)bus_address);
 	params.mailbox[3] = sizeof(*base_struct);
 
-	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_INIT_BASE_STRUCT_ADDRESS,
-		&params);
+	rc = sis_send_sync_cmd(ctrl_info, SIS_CMD_INIT_BASE_STRUCT_ADDRESS, &params);
 
-	dma_unmap_single(&ctrl_info->pci_dev->dev, bus_address,
-			sizeof(*base_struct), DMA_TO_DEVICE);
+	dma_unmap_single(&ctrl_info->pci_dev->dev, bus_address, sizeof(*base_struct), DMA_TO_DEVICE);
 out:
 	kfree(base_struct_unaligned);
 
@@ -373,12 +367,10 @@ static int sis_wait_for_doorbell_bit_to_clear(
 	timeout = (SIS_DOORBELL_BIT_CLEAR_TIMEOUT_SECS * HZ) + jiffies;
 
 	while (1) {
-		doorbell_register =
-			readl(&ctrl_info->registers->sis_host_to_ctrl_doorbell);
+		doorbell_register = readl(&ctrl_info->registers->sis_host_to_ctrl_doorbell);
 		if ((doorbell_register & bit) == 0)
 			break;
-		if (readl(&ctrl_info->registers->sis_firmware_status) &
-			SIS_CTRL_KERNEL_PANIC) {
+		if (readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_PANIC) {
 			rc = -ENODEV;
 			break;
 		}
@@ -416,8 +408,7 @@ void sis_enable_intx(struct pqi_ctrl_info *ctrl_info)
 void sis_shutdown_ctrl(struct pqi_ctrl_info *ctrl_info,
 	enum pqi_ctrl_shutdown_reason ctrl_shutdown_reason)
 {
-	if (readl(&ctrl_info->registers->sis_firmware_status) &
-		SIS_CTRL_KERNEL_PANIC)
+	if (readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_PANIC)
 		return;
 
 	if (ctrl_info->firmware_triage_supported)
@@ -447,17 +438,29 @@ u32 sis_read_driver_scratch(struct pqi_ctrl_info *ctrl_info)
 	return readl(&ctrl_info->registers->sis_driver_scratch);
 }
 
-static inline enum sis_fw_triage_status
-	sis_read_firmware_triage_status(struct pqi_ctrl_info *ctrl_info)
+static inline enum sis_fw_triage_status sis_read_firmware_triage_status(struct pqi_ctrl_info *ctrl_info)
 {
-	return ((enum sis_fw_triage_status)(readl(&ctrl_info->registers->sis_firmware_status) &
-		SIS_CTRL_KERNEL_FW_TRIAGE));
+	return ((enum sis_fw_triage_status)(readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_FW_TRIAGE));
+}
+
+bool sis_is_ctrl_logging_supported(struct pqi_ctrl_info *ctrl_info)
+{
+	return readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_CTRL_LOGGING;
+}
+
+void sis_notify_kdump(struct pqi_ctrl_info *ctrl_info)
+{
+	sis_set_doorbell_bit(ctrl_info, SIS_NOTIFY_KDUMP);
+}
+
+static inline enum sis_ctrl_logging_status sis_read_ctrl_logging_status(struct pqi_ctrl_info *ctrl_info)
+{
+	return ((enum sis_ctrl_logging_status)((readl(&ctrl_info->registers->sis_firmware_status) & SIS_CTRL_KERNEL_CTRL_LOGGING_STATUS) >> 3));
 }
 
 void sis_soft_reset(struct pqi_ctrl_info *ctrl_info)
 {
-	writel(SIS_SOFT_RESET,
-		&ctrl_info->registers->sis_host_to_ctrl_doorbell);
+	writel(SIS_SOFT_RESET, &ctrl_info->registers->sis_host_to_ctrl_doorbell);
 }
 
 #define SIS_FW_TRIAGE_STATUS_TIMEOUT_SECS		300
@@ -477,8 +480,7 @@ int sis_wait_for_fw_triage_completion(struct pqi_ctrl_info *ctrl_info)
 				"firmware triage condition invalid\n");
 			rc = -EINVAL;
 			break;
-		} else if (status == FW_TRIAGE_NOT_STARTED ||
-			status == FW_TRIAGE_COMPLETED) {
+		} else if (status == FW_TRIAGE_NOT_STARTED || status == FW_TRIAGE_COMPLETED) {
 			rc = 0;
 			break;
 		}
@@ -494,23 +496,50 @@ int sis_wait_for_fw_triage_completion(struct pqi_ctrl_info *ctrl_info)
 	}
 
 	return rc;
+}
 
+#define SIS_CTRL_LOGGING_STATUS_TIMEOUT_SECS		180
+#define SIS_CTRL_LOGGING_STATUS_POLL_INTERVAL_SECS	1
+
+int sis_wait_for_ctrl_logging_completion(struct pqi_ctrl_info *ctrl_info)
+{
+	int rc;
+	enum sis_ctrl_logging_status status;
+	unsigned long timeout;
+
+	timeout = (SIS_CTRL_LOGGING_STATUS_TIMEOUT_SECS * HZ) + jiffies;
+	while (1) {
+		status = sis_read_ctrl_logging_status(ctrl_info);
+		if (status == CTRL_LOGGING_COND_INVALID) {
+			dev_err(&ctrl_info->pci_dev->dev,
+				"controller data logging condition invalid\n");
+			rc = -EINVAL;
+			break;
+		} else if (status == CTRL_LOGGING_COMPLETED) {
+			rc = 0;
+			break;
+		}
+
+		if (time_after(jiffies, timeout)) {
+			dev_err(&ctrl_info->pci_dev->dev,
+				"timed out waiting for controller data logging status\n");
+			rc = -ETIMEDOUT;
+			break;
+		}
+
+		ssleep(SIS_CTRL_LOGGING_STATUS_POLL_INTERVAL_SECS);
+	}
+
+	return rc;
 }
 
 void sis_verify_structures(void)
 {
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		revision) != 0x0);
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		flags) != 0x4);
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		error_buffer_paddr_low) != 0x8);
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		error_buffer_paddr_high) != 0xc);
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		error_buffer_element_length) != 0x10);
-	BUILD_BUG_ON(offsetof(struct sis_base_struct,
-		error_buffer_num_elements) != 0x14);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, revision) != 0x0);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, flags) != 0x4);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, error_buffer_paddr_low) != 0x8);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, error_buffer_paddr_high) != 0xc);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, error_buffer_element_length) != 0x10);
+	BUILD_BUG_ON(offsetof(struct sis_base_struct, error_buffer_num_elements) != 0x14);
 	BUILD_BUG_ON(sizeof(struct sis_base_struct) != 0x18);
 }
-

@@ -1,6 +1,39 @@
 # smartpqi
 Microchip PQI Linux Driver 
 
+##Driver Build
+
+To build the driver outside of a kernel tree.
+  - make -f Makefile.alt
+
+A dkms.conf file is included in the source for use with DKMS.
+
+DKMS helps insure a driver (like smartpqi) rebuilds for each kernel update
+that happens on a system.
+  - http://linux.dell.com/dkms
+  - http://help.ubuntu.com/community/DKMS
+
+Steps for using DKMS and the smartpqi driver source with Ubuntu:
+  - Insure dkms and compiler tools are installed.
+    - apt-get install dkms build-essential
+  - Unpack smartpqi source tarball
+  - copy the directory to /usr/src/smartpqi-<driver_version>
+    - Note DKMS does not support the "-" in the version number.
+      Substitute with ".".
+    - EX. cp -a smartpqi-2.1.24 /usr/src/smartpqi-2.1.24.046
+  - Move Makefile.alt to Makefile
+  - dkms add -m smartpqi -v 2.1.24.046
+  - dkms build -m smartpqi -v 2.1.24.046
+  - dkms install -m smartpqi -v 2.1.24.046
+
+##Changelog
+
+Version 2.1.24-046 (August 2023)
+ - Added support for ABORT handler in the driver in order to avoid I/O stalls
+   across all devices attached to a controller when I/O requests time out.
+ - Added sysfs entry for NUMA node in /sys/block/sdX/device. NUMA node detail
+   is added for each exposed device similar to NVMe devices.
+
 Version 2.1.22-040 (March 2023)
  - Added support for NCQ priority in the RAID path. Enable the NCQ priority
    feature for the physical device in the RAID path when IOBypass is disabled.
@@ -443,34 +476,10 @@ Version 1.1.2-120 (September 2017)
 Version 1.0.4-101
   - Initial public driver release.
 
-
-To build the driver outside of a kernel tree.
-  - make -f Makefile.alt
-
-A dkms.conf file is included in the source for use with DKMS.
-
-DKMS helps insure a driver (like smartpqi) rebuilds for each kernel update
-that happens on a system.
-  - http://linux.dell.com/dkms
-  - http://help.ubuntu.com/community/DKMS
-
-Steps for using DKMS and the smartpqi driver source with Ubuntu:
-  - Insure dkms and compiler tools are installed.
-    - apt-get install dkms build-essential
-  - Unpack smartpqi source tarball
-  - copy the directory to /usr/src/smartpqi-<driver_version>
-    - Note DKMS does not support the "-" in the version number. 
-      Substitute with ".".
-    - EX. cp -a smartpqi-1.0.4 /usr/src/smartpqi-1.0.4.101
-  - Move Makefile.alt to Makefile
-  - dkms add -m smartpqi -v 1.0.4.101
-  - dkms build -m smartpqi -v 1.0.4.101
-  - dkms install -m smartpqi -v 1.0.4.101
-
+#Contact
 To provide kernel/driver development feedback, send email to 
 storagedev@microchip.com.
 
 License: GPLv2
-
-August 2022
+August 2023
 

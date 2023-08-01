@@ -38,7 +38,7 @@ KERNEL_CLASS := $(shell \
    then \
       if [ $(KMAJOR) -lt 1 ]; \
       then \
-	echo "KCLASS$(KVERSION)A"; \
+        echo "KCLASS$(KVERSION)A"; \
       elif [ $(KMAJOR) -lt 5 ]; \
       then \
         echo "KCLASS$(KVERSION)B"; \
@@ -50,7 +50,12 @@ KERNEL_CLASS := $(shell \
       fi; \
    elif [ $(KVERSION) -eq 6 ]; \
    then \
-      echo "KCLASS$(KVERSION)A"; \
+      if [ $(KMAJOR) -lt 1 ]; \
+      then \
+        echo "KCLASS$(KVERSION)A"; \
+      else \
+        echo "KCLASS$(KVERSION)B"; \
+      fi; \
    fi; \
 )
 

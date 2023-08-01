@@ -1,6 +1,6 @@
 /*
  *    driver for Microchip PQI-based storage controllers
- *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2019-2023 Microchip Technology Inc. and its subsidiaries
  *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
@@ -26,7 +26,6 @@
 #if KFEATURE_ENABLE_SCSI_MAP_QUEUES
 #include <linux/blk-mq-pci.h>
 #endif
-extern struct device_attribute *pqi_ncq_prio_sdev_attrs;
 
 #if !KFEATURE_HAS_2011_03_QUEUECOMMAND
 
@@ -76,8 +75,7 @@ int scsi_change_queue_depth(struct scsi_device *sdev, int queue_depth)
 	return queue_depth;
 }
 
-static int pqi_change_queue_depth(struct scsi_device *sdev, int qdepth,
-	int reason)
+static int pqi_change_queue_depth(struct scsi_device *sdev, int qdepth, int reason)
 {
 	if (reason == SCSI_QDEPTH_DEFAULT || reason == SCSI_QDEPTH_RAMP_UP) {
 		struct pqi_scsi_dev *device = sdev->hostdata;
@@ -118,6 +116,7 @@ static int pqi_change_queue_type(struct scsi_device *sdev, int tag_type)
 #endif	/* !KFEATURE_HAS_SCSI_CHANGE_QUEUE_DEPTH */
 
 #if KFEATURE_ENABLE_SCSI_MAP_QUEUES
+#if KFEATURE_MAP_QUEUES_RETURNS_INT
 static int pqi_map_queues(struct Scsi_Host *shost)
 {
 	struct pqi_ctrl_info *ctrl_info = shost_to_hba(shost);
@@ -143,6 +142,27 @@ static int pqi_map_queues(struct Scsi_Host *shost)
 #endif
 	}
 }
+#else
+static void pqi_map_queues(struct Scsi_Host *shost)
+{
+	struct pqi_ctrl_info *ctrl_info = shost_to_hba(shost);
+
+	if (!ctrl_info->disable_managed_interrupts) {
+#if KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4
+		blk_mq_pci_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
+					ctrl_info->pci_dev, 0);
+#else
+	#error "A version for KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES has not been defined."
+#endif
+	} else {
+#if KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3
+		blk_mq_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT]);
+#else
+	#error "A version for KFEATURE_HAS_BLK_MQ_MAP_QUEUES has not been defined."
+#endif
+	}
+}
+#endif
 #endif /* KFEATURE_ENABLE_SCSI_MAP_QUEUES */
 
 void pqi_compat_init_scsi_host_template(struct scsi_host_template *hostt)
@@ -199,6 +219,7 @@ int pcie_capability_read_word(struct pci_dev *dev, int pos, u16 *val)
 	int ret;
 
 	*val = 0;
+
 	if (pos & 1)
 		return -EINVAL;
 
@@ -210,6 +231,7 @@ int pcie_capability_read_word(struct pci_dev *dev, int pos, u16 *val)
 	 */
 	if (ret)
 		*val = 0;
+
 	return ret;
 }
 
@@ -255,9 +277,11 @@ static int pqi_bsg_map_buffer(struct bsg_buffer *buf, struct request *req)
 	buf->sg_list = kzalloc(sz, GFP_KERNEL);
 	if (!buf->sg_list)
 		return -ENOMEM;
+
 	sg_init_table(buf->sg_list, req->nr_phys_segments);
 	buf->sg_cnt = blk_rq_map_sg(req->q, req, buf->sg_list);
 	buf->payload_len = blk_rq_bytes(req);
+
 	return 0;
 }
 
@@ -299,6 +323,7 @@ struct bsg_return_data {
 	int result;
 	unsigned int reply_payload_rcv_len;
 };
+
 static struct bsg_return_data bsg_ret;
 
 void pqi_bsg_job_done(struct bsg_job *job, int result,
@@ -326,6 +351,7 @@ int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
 	job = kzalloc(sizeof(struct bsg_job), GFP_KERNEL);
 	if (!job)
 		return -ENOMEM;
+
 	job->dd_data = &bsg_job;
 
 	pqi_bsg_prepare_job(job, rq);
@@ -340,6 +366,7 @@ int pqi_sas_smp_handler_compat(struct Scsi_Host *shost, struct sas_rphy *rphy,
 	req->resid_len = 0;
 
 	kfree(job);
+
 	return bsg_ret.result;
 }
 
@@ -370,7 +397,7 @@ void pqi_pci_free_irq_vectors(struct pci_dev *dev)
 }
 
 int pqi_pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
-                              unsigned int max_vecs, unsigned int flags)
+	unsigned int max_vecs, unsigned int flags)
 {
 #if KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
 	return pci_alloc_irq_vectors(dev, min_vecs, max_vecs, flags);
@@ -385,8 +412,7 @@ int pqi_pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
 	for (i = 0; i < max_vecs; i++)
 		msix_entries[i].entry = i;
 
-	num_vectors_enabled = pci_enable_msix_range(dev, msix_entries, min_vecs,
-		max_vecs);
+	num_vectors_enabled = pci_enable_msix_range(dev, msix_entries, min_vecs, max_vecs);
 
 	for (i = 0; i < num_vectors_enabled; i++) {
 		ctrl_info->msix_vectors[i] = msix_entries[i].vector;

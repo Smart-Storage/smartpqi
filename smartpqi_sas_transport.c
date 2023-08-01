@@ -1,6 +1,6 @@
 /*
  *    driver for Microchip PQI-based storage controllers
- *    Copyright (c) 2019-2021 Microchip Technology Inc. and its subsidiaries
+ *    Copyright (c) 2019-2023 Microchip Technology Inc. and its subsidiaries
  *    Copyright (c) 2016-2018 Microsemi Corporation
  *    Copyright (c) 2016 PMC-Sierra, Inc.
  *
@@ -35,8 +35,7 @@ static struct pqi_sas_phy *pqi_alloc_sas_phy(struct pqi_sas_port *pqi_sas_port)
 	if (!pqi_sas_phy)
 		return NULL;
 
-	phy = sas_phy_alloc(pqi_sas_port->parent_node->parent_dev,
-		pqi_sas_port->next_phy_index);
+	phy = sas_phy_alloc(pqi_sas_port->parent_node->parent_dev, pqi_sas_port->next_phy_index);
 	if (!phy) {
 		kfree(pqi_sas_phy);
 		return NULL;
@@ -87,8 +86,7 @@ static int pqi_sas_port_add_phy(struct pqi_sas_phy *pqi_sas_phy)
 		return rc;
 
 	sas_port_add_phy(pqi_sas_port->port, pqi_sas_phy->phy);
-	list_add_tail(&pqi_sas_phy->phy_list_entry,
-		&pqi_sas_port->phy_list_head);
+	list_add_tail(&pqi_sas_phy->phy_list_entry, &pqi_sas_port->phy_list_head);
 	pqi_sas_phy->added_to_port = true;
 
 	return 0;
@@ -126,8 +124,7 @@ static int pqi_sas_port_add_rphy(struct pqi_sas_port *pqi_sas_port,
 static struct sas_rphy *pqi_sas_rphy_alloc(struct pqi_sas_port *pqi_sas_port)
 {
 	if (pqi_sas_port->device && pqi_sas_port->device->is_expander_smp_device)
-		return sas_expander_alloc(pqi_sas_port->port,
-				SAS_FANOUT_EXPANDER_DEVICE);
+		return sas_expander_alloc(pqi_sas_port->port, SAS_FANOUT_EXPANDER_DEVICE);
 
 	return sas_end_device_alloc(pqi_sas_port->port);
 }
@@ -206,9 +203,8 @@ static void pqi_free_sas_node(struct pqi_sas_node *pqi_sas_node)
 	if (!pqi_sas_node)
 		return;
 
-	list_for_each_entry_safe(pqi_sas_port, next,
-		&pqi_sas_node->port_list_head, port_list_entry)
-			pqi_free_sas_port(pqi_sas_port);
+	list_for_each_entry_safe(pqi_sas_port, next, &pqi_sas_node->port_list_head, port_list_entry)
+		pqi_free_sas_port(pqi_sas_port);
 
 	kfree(pqi_sas_node);
 }
@@ -218,8 +214,7 @@ struct pqi_scsi_dev *pqi_find_device_by_sas_rphy(
 {
 	struct pqi_scsi_dev *device;
 
-	list_for_each_entry(device, &ctrl_info->scsi_device_list,
-		scsi_device_list_entry) {
+	list_for_each_entry(device, &ctrl_info->scsi_device_list, scsi_device_list_entry) {
 		if (!device->sas_port)
 			continue;
 		if (device->sas_port->rphy == rphy)
@@ -286,8 +281,7 @@ int pqi_add_sas_device(struct pqi_sas_node *pqi_sas_node,
 	struct pqi_sas_port *pqi_sas_port;
 	struct sas_rphy *rphy;
 
-	pqi_sas_port = pqi_alloc_sas_port(pqi_sas_node,
-		device->sas_address, device);
+	pqi_sas_port = pqi_alloc_sas_port(pqi_sas_node, device->sas_address, device);
 	if (!pqi_sas_port)
 		return -ENOMEM;
 
@@ -364,16 +358,14 @@ static int pqi_sas_get_enclosure_identifier(struct sas_rphy *rphy,
 		goto out;
 	}
 
-	list_for_each_entry(device, &ctrl_info->scsi_device_list,
-		scsi_device_list_entry) {
+	list_for_each_entry(device, &ctrl_info->scsi_device_list, scsi_device_list_entry) {
 		if (device->devtype == TYPE_ENCLOSURE &&
 			device->box_index == found_device->box_index &&
 			device->phys_box_on_bus ==
 				found_device->phys_box_on_bus &&
 			memcmp(device->phys_connector,
 				found_device->phys_connector, 2) == 0) {
-			*identifier =
-				get_unaligned_be64(&device->wwid[8]);
+			*identifier = get_unaligned_be64(&device->wwid[8]);
 			rc = 0;
 			goto out;
 		}
@@ -384,11 +376,8 @@ static int pqi_sas_get_enclosure_identifier(struct sas_rphy *rphy,
 		goto out;
 	}
 
-	list_for_each_entry(device, &ctrl_info->scsi_device_list,
-		scsi_device_list_entry) {
-		if (device->devtype == TYPE_ENCLOSURE &&
-			CISS_GET_DRIVE_NUMBER(device->scsi3addr) ==
-				PQI_VSEP_CISS_BTL) {
+	list_for_each_entry(device, &ctrl_info->scsi_device_list, scsi_device_list_entry) {
+		if (device->devtype == TYPE_ENCLOSURE && CISS_GET_DRIVE_NUMBER(device->scsi3addr) == PQI_VSEP_CISS_BTL) {
 			*identifier = get_unaligned_be64(&device->wwid[8]);
 			rc = 0;
 			goto out;
@@ -480,19 +469,16 @@ pqi_build_csmi_smp_passthru_buffer(struct sas_rphy *rphy,
 	resp_size = job->reply_payload.payload_len;
 
 	ioctl_header = &smp_buf->ioctl_header;
-	put_unaligned_le32(sizeof(smp_buf->ioctl_header),
-		&ioctl_header->header_length);
+	put_unaligned_le32(sizeof(smp_buf->ioctl_header), &ioctl_header->header_length);
 	put_unaligned_le32(CSMI_IOCTL_TIMEOUT, &ioctl_header->timeout);
-	put_unaligned_le32(CSMI_CC_SAS_SMP_PASSTHRU,
-		&ioctl_header->control_code);
+	put_unaligned_le32(CSMI_CC_SAS_SMP_PASSTHRU, &ioctl_header->control_code);
 	put_unaligned_le32(sizeof(smp_buf->parameters), &ioctl_header->length);
 
 	parameters = &smp_buf->parameters;
 	parameters->phy_identifier = rphy->identify.phy_identifier;
 	parameters->port_identifier = 0;
 	parameters->connection_rate = 0;
-	put_unaligned_be64(rphy->identify.sas_address,
-		&parameters->destination_sas_address);
+	put_unaligned_be64(rphy->identify.sas_address, &parameters->destination_sas_address);
 
 	if (req_size > SMP_CRC_FIELD_LENGTH)
 		req_size -= SMP_CRC_FIELD_LENGTH;
@@ -507,24 +493,20 @@ pqi_build_csmi_smp_passthru_buffer(struct sas_rphy *rphy,
 	return smp_buf;
 }
 
-static unsigned int pqi_build_sas_smp_handler_reply(
-	struct bmic_csmi_smp_passthru_buffer *smp_buf, struct bsg_job *job,
-	struct pqi_raid_error_info *error_info)
+static unsigned int pqi_build_sas_smp_handler_reply(struct bmic_csmi_smp_passthru_buffer *smp_buf,
+	struct bsg_job *job, struct pqi_raid_error_info *error_info)
 {
 	sg_copy_from_buffer(job->reply_payload.sg_list,
 		job->reply_payload.sg_cnt, &smp_buf->parameters.response,
 		le32_to_cpu(smp_buf->parameters.response_length));
 
 	job->reply_len = le16_to_cpu(error_info->sense_data_length);
-	memcpy(job->reply, error_info->data,
-		le16_to_cpu(error_info->sense_data_length));
+	memcpy(job->reply, error_info->data, le16_to_cpu(error_info->sense_data_length));
 
-	return job->reply_payload.payload_len -
-		get_unaligned_le32(&error_info->data_in_transferred);
+	return job->reply_payload.payload_len - get_unaligned_le32(&error_info->data_in_transferred);
 }
 
-void pqi_sas_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
-	struct sas_rphy *rphy)
+void pqi_sas_smp_handler(struct bsg_job *job, struct Scsi_Host *shost, struct sas_rphy *rphy)
 {
 	int rc;
 	struct pqi_ctrl_info *ctrl_info;
@@ -560,8 +542,7 @@ void pqi_sas_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
 		goto out;
 	}
 
-	rc = pqi_csmi_smp_passthru(ctrl_info, smp_buf, sizeof(*smp_buf),
-		&error_info);
+	rc = pqi_csmi_smp_passthru(ctrl_info, smp_buf, sizeof(*smp_buf), &error_info);
 	if (rc)
 		goto out;
 
@@ -582,4 +563,3 @@ struct sas_function_template pqi_sas_transport_functions = {
 	.set_phy_speed = pqi_sas_phy_speed,
 	.smp_handler = PQI_SAS_SMP_HANDLER,
 };
-
