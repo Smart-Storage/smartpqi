@@ -70,7 +70,8 @@
 	defined(RHEL8U5)    || \
 	defined(RHEL8U6)    || \
 	defined(RHEL8U7)    || \
-	defined(RHEL8U8)
+	defined(RHEL8U8)    || \
+	defined(RHEL8U9)
 #define RHEL8
 #endif
 
@@ -78,7 +79,8 @@
 #if \
 	defined(RHEL9U0)    || \
 	defined(RHEL9U1)    || \
-	defined(RHEL9U2)
+	defined(RHEL9U2)    || \
+	defined(RHEL9U3)
 #define RHEL9
 #endif
 
@@ -192,7 +194,7 @@
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
-#if defined(KCLASS6B) || defined(RHEL9U2)
+#if defined(KCLASS6B) || defined(RHEL9U2) || defined(RHEL9U3)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3 		1
 #else
@@ -286,7 +288,8 @@
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
 #if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5) || \
-    defined(RHEL8U6) || defined(RHEL8U7) || defined(RHEL8U8)
+    defined(RHEL8U6) || defined(RHEL8U7) || defined(RHEL8U8) || \
+    defined(RHEL8U9)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #endif
 
@@ -608,6 +611,14 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_IBM)
 #define PCI_VENDOR_ID_IBM		0x1014
+#endif
+
+#if !defined(PCI_VENDOR_ID_CISCO)
+#define PCI_VENDOR_ID_CISCO		0x1137
+#endif
+
+#if !defined(PCI_VENDOR_ID_CLOUDNINE)
+#define PCI_VENDOR_ID_CLOUDNINE		0x1f51
 #endif
 
 #if !defined(offsetofend)

@@ -20,17 +20,44 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
   - copy the directory to /usr/src/smartpqi-<driver_version>
     - Note DKMS does not support the "-" in the version number.
       Substitute with ".".
-    - EX. cp -a smartpqi-2.1.24 /usr/src/smartpqi-2.1.24.046
+    - EX. cp -a smartpqi-2.1.26 /usr/src/smartpqi-2.1.26.030
   - Move Makefile.alt to Makefile
-  - dkms add -m smartpqi -v 2.1.24.046
-  - dkms build -m smartpqi -v 2.1.24.046
-  - dkms install -m smartpqi -v 2.1.24.046
+  - dkms add -m smartpqi -v 2.1.26.030
+  - dkms build -m smartpqi -v 2.1.26.030
+  - dkms install -m smartpqi -v 2.1.26.030
 
 ## Changelog
+
+Version 2.1.26-030 (November 2023)
+ - Fixed an OS crash issue that happens while creating/deleting a logical drive
+   or adding/removing physical drives.
+   - Root cause: The driver is rescanning a device which does not exist. There
+     was a problem where a device rescan operation is failing because the
+     device pointer being used is not valid.  This results in a NULL pointer
+     de-reference issue and causes an OS crash.
+   - Fix: Multiple conditions will be evaluated before notifying the OS to do
+     a rescan. Driver will skip re-scanning the device if any one of the
+     following conditions are met:
+     - Device was not added to the OS scsi mid-layer yet or the device was
+       removed.
+     - Devices which are marked for removal or in the process of removal.
+   - Risk: Low
+
+ - Fixed an issue to eliminate race condition while rescanning a logical drive.
+   Under very rare conditions, after a logical drive size expansion the OS
+   still sees the size of the original logical drive.
+   - Root cause: The rescan flag in the driver is used to signal the need for
+     a logical drive rescan. A race condition occurs in the driver which leads
+     to one thread overwriting the flag inadvertently. As a result, the driver
+     is not notifying the OS scsi mid-layer to rescan the logical drive.
+   - Fix: Acquire spinlock and set the rescan flag.
+   - Risk: Low
+
 
 Version 2.1.24-046 (August 2023)
  - Added support for ABORT handler in the driver in order to avoid I/O stalls
    across all devices attached to a controller when I/O requests time out.
+
  - Added sysfs entry for NUMA node in /sys/block/sdX/device. NUMA node detail
    is added for each exposed device similar to NVMe devices.
 
