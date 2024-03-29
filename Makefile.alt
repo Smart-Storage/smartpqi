@@ -221,6 +221,14 @@ MORE_CFLAGS += $(shell \
    fi; \
 )
 
+MORE_CFLAGS += $(shell \
+    GF=`find -L $(KDIR) -name scsi_host.h | xargs grep 'void scsi_rescan_device' | tail -1`; \
+    if [ ! -z "$$GF" ]; \
+    then \
+       echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLDER_SCSI_RESCAN_DEVICE"; \
+    fi; \
+)
+
 default:
 	$(MAKE) -C $(KBDIR) M=$(PWD) $(COMPAT_SWITCH) $(MORE_CFLAGS) modules
 

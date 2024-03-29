@@ -20,13 +20,31 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
   - copy the directory to /usr/src/smartpqi-<driver_version>
     - Note DKMS does not support the "-" in the version number.
       Substitute with ".".
-    - EX. cp -a smartpqi-2.1.26 /usr/src/smartpqi-2.1.26.030
+    - EX. cp -a smartpqi-2.1.28 /usr/src/smartpqi-2.1.28.025
   - Move Makefile.alt to Makefile
-  - dkms add -m smartpqi -v 2.1.26.030
-  - dkms build -m smartpqi -v 2.1.26.030
-  - dkms install -m smartpqi -v 2.1.26.030
+  - dkms add -m smartpqi -v 2.1.28.025
+  - dkms build -m smartpqi -v 2.1.28.025
+  - dkms install -m smartpqi -v 2.1.28.025
 
 ## Changelog
+
+Version 2.1.28-025 (March 2024)
+ - Fixed an issue to handle multi-path failover.
+   - Root Cause: Controller firmware does not return the proper error code for
+     I/O errors caused by a multi-path path failure.
+   - Fix: The driver maps I/O errors returned by the controller firmware into
+     errors that cause the multi-path layers in the OS to detect the failure of
+     a path.
+   - Risk: Low
+
+ - Fixed an issue to correct RAID bypass counter. An OS crash issue occurs
+   while updating the RAID bypass counter.
+   - Root Cause: The SmartPQI driver was using the RAID bypass counter pointer
+     that was not allocated. This results in a NULL pointer de-reference issue
+     which causes the OS to crash.
+   - Fix: Driver now updates the RAID bypass counter pointer in the device
+     structure when the driver detects that bypass has been enabled.
+   - Risk: Low
 
 Version 2.1.26-030 (November 2023)
  - Fixed an OS crash issue that happens while creating/deleting a logical drive
@@ -509,5 +527,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-August 2023
+March 2024
 

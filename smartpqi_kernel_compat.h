@@ -71,7 +71,8 @@
 	defined(RHEL8U6)    || \
 	defined(RHEL8U7)    || \
 	defined(RHEL8U8)    || \
-	defined(RHEL8U9)
+	defined(RHEL8U9)    || \
+	defined(RHEL8U10)
 #define RHEL8
 #endif
 
@@ -80,7 +81,8 @@
 	defined(RHEL9U0)    || \
 	defined(RHEL9U1)    || \
 	defined(RHEL9U2)    || \
-	defined(RHEL9U3)
+	defined(RHEL9U3)    || \
+	defined(RHEL9U4)
 #define RHEL9
 #endif
 
@@ -112,7 +114,8 @@
 	defined(SLES15SP2) || \
 	defined(SLES15SP3) || \
 	defined(SLES15SP4) || \
-	defined(SLES15SP5)
+	defined(SLES15SP5) || \
+	defined(SLES15SP6)
 #define SLES15
 #endif
 
@@ -194,7 +197,8 @@
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
-#if defined(KCLASS6B) || defined(RHEL9U2) || defined(RHEL9U3)
+#if defined(KCLASS6B) || defined(RHEL9U2) || defined(RHEL9U3) || \
+      defined(RHEL9U4)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3 		1
 #else
@@ -271,7 +275,7 @@
     defined(SLES12SP5) || defined(RHEL8) || defined(KCLASS5A) || \
     defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
-    defined(SLES15SP5) || \
+    defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(RHEL9) || defined (CENTOS7ALTARM) || defined(OEULER2203) || \
     defined(KCLASS6) || defined(K10SP2)
 #define KFEATURE_HAS_KTIME_SECONDS			1
@@ -280,7 +284,7 @@
 #endif
 #if defined(KCLASS4C) || defined(RHEL8) || defined(SLES15SP1) || \
     defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
-    defined(SLES15SP5) || \
+    defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(KCLASS5A) ||  defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) ||  defined(SLES12SP5) || defined (CENTOS7ALTARM) || \
     defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6) || \
@@ -289,7 +293,7 @@
 #endif
 #if defined(RHEL8U3) || defined(RHEL8U4) || defined(RHEL8U5) || \
     defined(RHEL8U6) || defined(RHEL8U7) || defined(RHEL8U8) || \
-    defined(RHEL8U9)
+    defined(RHEL8U9) || defined(RHEL8U10)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #endif
 
@@ -298,7 +302,7 @@
 #endif
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2) || \
-    defined(SLES15SP3) || defined(SLES15SP4) || defined(SLES15SP5) || \
+    defined(SLES15SP3) || defined(SLES15SP4) || defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6) || \
     defined(K10SP2)
 #define dma_zalloc_coherent	dma_alloc_coherent
@@ -308,7 +312,7 @@
 
 #if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3) || \
-    defined(SLES15SP4) || defined(SLES15SP5) || \
+    defined(SLES15SP4) || defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(RHEL9) || defined(OEULER2003) || \
     defined(OEULER2203) || defined(KCLASS6) || defined(K10SP2)
 #define IOCTL_INT	unsigned int
@@ -317,7 +321,7 @@
 #endif
 
 #if defined(KCLASS5C) || defined(KCLASS5D) || defined(SLES15SP4) || \
-    defined(SLES15SP5) || \
+    defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
@@ -327,10 +331,18 @@
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) || defined(KCLASS4C) || defined(KCLASS4D) || \
     defined(RHEL8) || defined(SLES15) || defined(SLES15SP4) || \
-    defined(SLES15SP5) || \
+    defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6) || \
     defined(K10SP2)
 #define KFEATURE_HAS_NCQ_PRIO_SUPPORT			1
+#endif
+
+#if defined(KFEATURE_HAS_OLDER_SCSI_RESCAN_DEVICE)
+#define PQI_SCSI_RESCAN_DEVICE(x) \
+	scsi_rescan_device((&x->sdev->sdev_gendev))
+#else
+#define PQI_SCSI_RESCAN_DEVICE(x) \
+	scsi_rescan_device((x->sdev))
 #endif
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
@@ -619,6 +631,14 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_CLOUDNINE)
 #define PCI_VENDOR_ID_CLOUDNINE		0x1f51
+#endif
+
+#if !defined(PCI_VENDOR_ID_INAGILE)
+#define PCI_VENDOR_ID_INAGILE		0x1ff9
+#endif
+
+#if !defined(PCI_VENDOR_ID_POWERLEADER)
+#define PCI_VENDOR_ID_POWERLEADER		0x1f3a
 #endif
 
 #if !defined(offsetofend)
