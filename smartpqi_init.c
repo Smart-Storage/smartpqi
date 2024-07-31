@@ -42,11 +42,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.28-025"
+#define DRIVER_VERSION		"2.1.30-031"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		28
-#define DRIVER_REVISION		25
+#define DRIVER_RELEASE		30
+#define DRIVER_REVISION		31
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -63,10 +63,10 @@
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-e85078e/s-c7b6bca)" " (d147/s325)");
+	DRIVER_VERSION " (d-5b50ac9/s-61bca4b)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-e85078e/s-c7b6bca)");
+	DRIVER_VERSION " (d-5b50ac9/s-61bca4b)");
 #endif
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
@@ -1470,8 +1470,8 @@ static int pqi_get_raid_map(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev
 	if (rc)
 		goto error;
 
-	device->raid_bypass_cnt = alloc_percpu(u64);
-	if (!device->raid_bypass_cnt) {
+	device->raid_io_stats = alloc_percpu(struct pqi_raid_io_stats);
+	if (!device->raid_io_stats) {
 		rc = -ENOMEM;
 		goto error;
 	}
@@ -2062,9 +2062,9 @@ static void pqi_scsi_update_device(struct pqi_ctrl_info *ctrl_info,
 				/* To prevent this from being freed later. */
 				new_device->raid_map = NULL;
 			}
-			if (new_device->raid_bypass_enabled && existing_device->raid_bypass_cnt == NULL) {
-				existing_device->raid_bypass_cnt = new_device->raid_bypass_cnt;
-				new_device->raid_bypass_cnt = NULL;
+			if (new_device->raid_bypass_enabled && existing_device->raid_io_stats == NULL) {
+				existing_device->raid_io_stats = new_device->raid_io_stats;
+				new_device->raid_io_stats = NULL;
 			}
 			existing_device->raid_bypass_configured = new_device->raid_bypass_configured;
 			existing_device->raid_bypass_enabled = new_device->raid_bypass_enabled;
@@ -2088,7 +2088,7 @@ static void pqi_scsi_update_device(struct pqi_ctrl_info *ctrl_info,
 static inline void pqi_free_device(struct pqi_scsi_dev *device)
 {
 	if (device) {
-		free_percpu(device->raid_bypass_cnt);
+		free_percpu(device->raid_io_stats);
 		kfree(device->raid_map);
 		kfree(device);
 	}
@@ -5682,7 +5682,7 @@ static bool pqi_is_parity_write_stream(struct pqi_ctrl_info *ctrl_info,
 	int rc;
 	struct pqi_scsi_dev *device;
 	struct pqi_stream_data *pqi_stream_data;
-	struct pqi_scsi_dev_raid_map_data rmd;
+	struct pqi_scsi_dev_raid_map_data rmd = { 0 };
 
 	if (!ctrl_info->enable_stream_detection)
 		return false;
@@ -5722,6 +5722,7 @@ static bool pqi_is_parity_write_stream(struct pqi_ctrl_info *ctrl_info,
 			rmd.first_block <= pqi_stream_data->next_lba + rmd.block_cnt) {
 				pqi_stream_data->next_lba = rmd.first_block + rmd.block_cnt;
 				pqi_stream_data->last_accessed = jiffies;
+				per_cpu_ptr(device->raid_io_stats, smp_processor_id())->write_stream_cnt++;
 				return true;
 		}
 
@@ -5754,7 +5755,6 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 	u16 hw_queue;
 	struct pqi_queue_group *queue_group;
 	bool raid_bypassed;
-	u64 *raid_bypass_cnt;
 	u8 lun;
 
 	scmd->host_scribble = PQI_NO_COMPLETION;
@@ -5807,8 +5807,7 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 			rc = pqi_raid_bypass_submit_scsi_cmd(ctrl_info, device, scmd, queue_group);
 			if (rc == 0 || rc == SCSI_MLQUEUE_HOST_BUSY) {
 				raid_bypassed = true;
-				raid_bypass_cnt = per_cpu_ptr(device->raid_bypass_cnt, smp_processor_id());
-				(*raid_bypass_cnt)++;
+				per_cpu_ptr(device->raid_io_stats, smp_processor_id())->raid_bypass_cnt++;
 			}
 		}
 		if (!raid_bypassed)
@@ -5944,14 +5943,12 @@ static void pqi_fail_io_queued_for_device(struct pqi_ctrl_info *ctrl_info,
 					continue;
 
 				scsi_device = scmd->device->hostdata;
-				if (scsi_device != device)
-					continue;
-
-				if ((u8)scmd->device->lun != lun)
-					continue;
 
 				list_del(&io_request->request_list_entry);
-				set_host_byte(scmd, DID_RESET);
+				if (scsi_device == device && (u8)scmd->device->lun == lun)
+ 					set_host_byte(scmd, DID_RESET);
+				else
+					set_host_byte(scmd, DID_REQUEUE);
 				pqi_free_io_request(io_request);
 				scsi_dma_unmap(scmd);
 				pqi_scsi_done(scmd);
@@ -6700,7 +6697,11 @@ static ssize_t pqi_lockup_action_store(struct device *dev,
 	char *action_name;
 	char action_name_buffer[32];
 
+#if KFEATURE_HAS_OLD_STRLCPY
 	strlcpy(action_name_buffer, buffer, sizeof(action_name_buffer));
+#else
+	strscpy(action_name_buffer, buffer, sizeof(action_name_buffer));
+#endif
 	action_name = strstrip(action_name_buffer);
 
 	for (i = 0; i < ARRAY_SIZE(pqi_lockup_actions); i++) {
@@ -7086,7 +7087,6 @@ static ssize_t pqi_raid_bypass_cnt_show(struct device *dev,
 	unsigned long flags;
 	u64 raid_bypass_cnt;
 	int cpu;
-	u64 *per_cpu_bypass_cnt_ptr;
 
 	sdev = to_scsi_device(dev);
 	ctrl_info = shost_to_hba(sdev->host);
@@ -7104,10 +7104,9 @@ static ssize_t pqi_raid_bypass_cnt_show(struct device *dev,
 
 	raid_bypass_cnt = 0;
 
-	if (device->raid_bypass_cnt) {
+	if (device->raid_io_stats) {
 		for_each_online_cpu(cpu) {
-			per_cpu_bypass_cnt_ptr = per_cpu_ptr(device->raid_bypass_cnt, cpu);
-			raid_bypass_cnt += *per_cpu_bypass_cnt_ptr;
+			raid_bypass_cnt += per_cpu_ptr(device->raid_io_stats, cpu)->raid_bypass_cnt;
 		}
 	}
 
@@ -7193,6 +7192,43 @@ static ssize_t pqi_numa_node_show(struct device *dev,
 	return scnprintf(buffer, PAGE_SIZE, "%d\n", ctrl_info->numa_node);
 }
 
+static ssize_t pqi_write_stream_cnt_show(struct device *dev,
+	struct device_attribute *attr, char *buffer)
+{
+	struct pqi_ctrl_info *ctrl_info;
+	struct scsi_device *sdev;
+	struct pqi_scsi_dev *device;
+	unsigned long flags;
+	u64 write_stream_cnt;
+	int cpu;
+
+	sdev = to_scsi_device(dev);
+	ctrl_info = shost_to_hba(sdev->host);
+
+	if (pqi_ctrl_offline(ctrl_info))
+		return -ENODEV;
+
+	spin_lock_irqsave(&ctrl_info->scsi_device_list_lock, flags);
+
+	device = sdev->hostdata;
+	if (!device) {
+		spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
+		return -ENODEV;
+	}
+
+	write_stream_cnt = 0;
+
+	if (device->raid_io_stats) {
+		for_each_online_cpu(cpu) {
+			write_stream_cnt += per_cpu_ptr(device->raid_io_stats, cpu)->write_stream_cnt;
+		}
+	}
+
+	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
+
+	return scnprintf(buffer, PAGE_SIZE, "0x%llx\n", write_stream_cnt);
+}
+
 static DEVICE_ATTR(lunid, 0444, pqi_lunid_show, NULL);
 static DEVICE_ATTR(unique_id, 0444, pqi_unique_id_show, NULL);
 static DEVICE_ATTR(path_info, 0444, pqi_path_info_show, NULL);
@@ -7203,6 +7239,7 @@ static DEVICE_ATTR(raid_bypass_cnt, 0444, pqi_raid_bypass_cnt_show, NULL);
 static DEVICE_ATTR(sas_ncq_prio_enable, 0644,
 	pqi_sas_ncq_prio_enable_show, pqi_sas_ncq_prio_enable_store);
 static DEVICE_ATTR(numa_node, 0444, pqi_numa_node_show, NULL);
+static DEVICE_ATTR(write_stream_cnt, 0444, pqi_write_stream_cnt_show, NULL);
 
 static struct PQI_DEVICE_ATTRIBUTE *pqi_sdev_attrs[] = {
 	PQI_ATTRIBUTE(&dev_attr_lunid),
@@ -7214,6 +7251,7 @@ static struct PQI_DEVICE_ATTRIBUTE *pqi_sdev_attrs[] = {
 	PQI_ATTRIBUTE(&dev_attr_raid_bypass_cnt),
 	PQI_ATTRIBUTE(&dev_attr_sas_ncq_prio_enable),
 	PQI_ATTRIBUTE(&dev_attr_numa_node),
+	PQI_ATTRIBUTE(&dev_attr_write_stream_cnt),
 	NULL
 };
 PQI_ATTRIBUTE_GROUPS(pqi_sdev);
@@ -9237,6 +9275,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_H3C, 0x0462)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_H3C, 0x1104)
 	},
 	{
@@ -9274,6 +9316,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_H3C, 0x8461)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_H3C, 0x8462)
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
@@ -9977,6 +10023,78 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CISCO, 0x02fe)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CISCO, 0x02ff)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CISCO, 0x0300)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       0x1e93, 0x1000)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       0x1e93, 0x1001)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       0x1e93, 0x1002)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       0x1e93, 0x1005)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_POWERLEADER, 0x0104)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1001)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1002)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1003)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1004)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1005)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1006)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1007)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1008)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x1009)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x100a)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_CLOUDNINE, 0x100e)
 	},
 	{
@@ -10101,64 +10219,9 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       PCI_VENDOR_ID_POWERLEADER, 0x0104)
+			       PCI_VENDOR_ID_INAGILE, 0x00a3)
 	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1e93, 0x1000)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1e93, 0x1001)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1e93, 0x1002)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1e93, 0x1005)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1001)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1002)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1003)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1004)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1005)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1006)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1007)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1008)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x1009)
-	},
-	{
-		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
-			       0x1f51, 0x100a)
-	},
+
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_ANY_ID, PCI_ANY_ID)

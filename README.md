@@ -28,6 +28,30 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.30-031 (July 2024)
+ - Fixed an issue where during the processing of a TMF on a device, the driver
+   is stuck while waiting for I/O to be drained from the driver's internal
+   request queue.
+   - Root Cause: During heavy I/O load, a data path request on a particular
+     device is added to the driver's request list but encounters a conditional
+     check where it needs more elements than are currently free in the inbound
+     queue on a particular queue group. This request remains in the request
+     list until the request submission function is triggered by the IRQ
+     handler, but unfortunately no completions arrive on that queue group for
+     a significantly long period of time. During the same time, a LUN reset
+     is triggered on another device. While processing the TMF on the other
+     device, attempts are made to fail I/Os queued on the device undergoing
+     reset. However, I/Os queued on other devices are not failed due to the
+     TMF condition check. Because of the stuck command in the request list and
+     the failure to fail I/O on the other devices, the system experiences a
+     LUN reset and system hang.
+   - Fix: For devices which are not undergoing reset, return DID_REQUEUE and
+     complete the requests that are stuck in the driver's internal request
+     queue. This adds the request back to the mid-layer queue, ensuring that
+     it is resubmitted after a short period without decrementing the retry
+     count in the OS SCSI-mid-layer.
+   - Risk: Low
+
 Version 2.1.28-025 (March 2024)
  - Fixed an issue to handle multi-path failover.
    - Root Cause: Controller firmware does not return the proper error code for

@@ -229,6 +229,14 @@ MORE_CFLAGS += $(shell \
     fi; \
 )
 
+MORE_CFLAGS += $(shell \
+    GF=`find -L $(KDIR) -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
+    if [ ! -z "$$GF" ]; \
+    then \
+       echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLD_STRLCPY"; \
+    fi; \
+)
+
 default:
 	$(MAKE) -C $(KBDIR) M=$(PWD) $(COMPAT_SWITCH) $(MORE_CFLAGS) modules
 
