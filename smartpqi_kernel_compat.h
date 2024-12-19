@@ -191,14 +191,14 @@
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #endif
-#elif defined(RHEL8) || defined(RHEL9) || defined(KCLASS5) || \
-      defined(KCLASS6) || defined(OEULER2203)
+#elif defined(RHEL8) || defined(RHEL9) || defined(RHEL9U5) || \
+      defined(KCLASS5) || defined(KCLASS6) || defined(OEULER2203)
 #define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
 #if defined(KCLASS6B) || defined(RHEL9U2) || defined(RHEL9U3) || \
-      defined(RHEL9U4)
+      defined(RHEL9U4) || defined(RHEL9U5)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3 		1
 #else
@@ -246,7 +246,7 @@
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4 		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3 		1
 #endif
-#elif defined(OEULER2003)
+#elif defined(OEULER2003) || defined(OEULER2403)
 #define dma_zalloc_coherent				dma_alloc_coherent
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
@@ -257,9 +257,15 @@
 #define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
+#if defined(OEULER2403)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3 		1
+#define KFEATURE_MAP_QUEUES_RETURNS_INT			0
+#else
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V2		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V1 		1
+#endif
 #elif defined(UBUNTU1404) || TORTUGA || defined(KCLASS3C)
 #define KFEATURE_HAS_PCI_ENABLE_MSIX_RANGE		0
 #define KFEATURE_HAS_ATOMIC_HOST_BUSY			0
@@ -276,7 +282,7 @@
     defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
     defined(SLES15SP5) || defined(SLES15SP6) || \
-    defined(RHEL9) || defined (CENTOS7ALTARM) || defined(OEULER2203) || \
+    defined(RHEL9) || defined(RHEL9U5) || defined (CENTOS7ALTARM) || defined(OEULER2203) || \
     defined(KCLASS6) || defined(K10SP2)
 #define KFEATURE_HAS_KTIME_SECONDS			1
 #define KFEATURE_HAS_SCSI_REQUEST			1
@@ -287,7 +293,7 @@
     defined(SLES15SP5) || defined(SLES15SP6) || \
     defined(KCLASS5A) ||  defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) ||  defined(SLES12SP5) || defined (CENTOS7ALTARM) || \
-    defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6) || \
+    defined(RHEL9) || defined(RHEL9U5) || defined(OEULER2203) || defined(KCLASS6) || \
     defined(K10SP2)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
@@ -303,7 +309,7 @@
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2) || \
     defined(SLES15SP3) || defined(SLES15SP4) || defined(SLES15SP5) || defined(SLES15SP6) || \
-    defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6) || \
+    defined(RHEL9) || defined(RHEL9U5) || defined(OEULER2203) || defined(KCLASS6) || \
     defined(K10SP2)
 #define dma_zalloc_coherent	dma_alloc_coherent
 #define shost_use_blk_mq(x)	1
@@ -313,7 +319,7 @@
 #if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3) || \
     defined(SLES15SP4) || defined(SLES15SP5) || defined(SLES15SP6) || \
-    defined(RHEL9) || defined(OEULER2003) || \
+    defined(RHEL9) || defined(RHEL9U5) || defined(OEULER2003) || defined(OEULER2403) || \
     defined(OEULER2203) || defined(KCLASS6) || defined(K10SP2)
 #define IOCTL_INT	unsigned int
 #else
@@ -322,7 +328,7 @@
 
 #if defined(KCLASS5C) || defined(KCLASS5D) || defined(SLES15SP4) || \
     defined(SLES15SP5) || defined(SLES15SP6) || \
-    defined(RHEL9) || defined(OEULER2203) || defined(KCLASS6)
+    defined(RHEL9) || defined(RHEL9U5) || defined(OEULER2203) || defined(OEULER2403) || defined(KCLASS6)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 #define ioremap_nocache ioremap
@@ -568,40 +574,72 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 	.subvendor = (subvend), .subdevice = (subdev)
 #endif
 
-#if !defined(PCI_VENDOR_ID_HPE)
-#define PCI_VENDOR_ID_HPE		0x1590
+#if !defined(PCI_VENDOR_ID_IBM)
+#define PCI_VENDOR_ID_IBM		0x1014
 #endif
 
-#if !defined(PCI_VENDOR_ID_ADVANTECH)
-#define PCI_VENDOR_ID_ADVANTECH		0x13fe
+#if !defined(PCI_VENDOR_ID_DELL)
+#define PCI_VENDOR_ID_DELL		0x1028
 #endif
 
-#if !defined(PCI_VENDOR_ID_FIBERHOME)
-#define PCI_VENDOR_ID_FIBERHOME		0x1d8d
-#endif
-
-#if !defined(PCI_VENDOR_ID_GIGABYTE)
-#define PCI_VENDOR_ID_GIGABYTE		0x1458
+#if !defined(PCI_VENDOR_ID_HP)
+#define PCI_VENDOR_ID_HP		0x103c
 #endif
 
 #if !defined(PCI_VENDOR_ID_FOXCONN)
 #define PCI_VENDOR_ID_FOXCONN		0x105b
 #endif
 
-#if !defined(PCI_VENDOR_ID_HUAWEI)
-#define PCI_VENDOR_ID_HUAWEI		0x19e5
+#if !defined(PCI_VENDOR_ID_CISCO)
+#define PCI_VENDOR_ID_CISCO		0x1137
 #endif
 
-#if !defined(PCI_VENDOR_ID_H3C)
-#define PCI_VENDOR_ID_H3C		0x193d
+#if !defined(PCI_VENDOR_ID_ADVANTECH)
+#define PCI_VENDOR_ID_ADVANTECH		0x13fe
+#endif
+
+#if !defined(PCI_VENDOR_ID_GIGABYTE)
+#define PCI_VENDOR_ID_GIGABYTE		0x1458
 #endif
 
 #if !defined(PCI_VENDOR_ID_QUANTA)
 #define PCI_VENDOR_ID_QUANTA		0x152d
 #endif
 
+#if !defined(PCI_VENDOR_ID_HPE)
+#define PCI_VENDOR_ID_HPE		0x1590
+#endif
+
+#if !defined(PCI_VENDOR_ID_H3C)
+#define PCI_VENDOR_ID_H3C		0x193d
+#endif
+
+#if !defined(PCI_VENDOR_ID_HUAWEI)
+#define PCI_VENDOR_ID_HUAWEI		0x19e5
+#endif
+
 #if !defined(PCI_VENDOR_ID_INSPUR)
 #define PCI_VENDOR_ID_INSPUR		0x1bd4
+#endif
+
+#if !defined(PCI_VENDOR_ID_RAMAXEL)
+#define PCI_VENDOR_ID_RAMAXEL		0x1cc4
+#endif
+
+#if !defined(PCI_VENDOR_ID_ZTE)
+#define PCI_VENDOR_ID_ZTE		0x1cf2
+#endif
+
+#if !defined(PCI_VENDOR_ID_LENOVO)
+#define PCI_VENDOR_ID_LENOVO		0x1d49
+#endif
+
+#if !defined(PCI_VENDOR_ID_FIBERHOME)
+#define PCI_VENDOR_ID_FIBERHOME		0x1d8d
+#endif
+
+#if !defined(PCI_VENDOR_ID_ALIBABA)
+#define PCI_VENDOR_ID_ALIBABA		0x1ded
 #endif
 
 #if !defined(PCI_VENDOR_ID_NTCOM)
@@ -612,24 +650,8 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 #define PCI_VENDOR_ID_NT		0x1f0c
 #endif
 
-#if !defined(PCI_VENDOR_ID_ZTE)
-#define PCI_VENDOR_ID_ZTE		0x1cf2
-#endif
-
-#if !defined(PCI_VENDOR_ID_RAMAXEL)
-#define PCI_VENDOR_ID_RAMAXEL		0x1cc4
-#endif
-
-#if !defined(PCI_VENDOR_ID_LENOVO)
-#define PCI_VENDOR_ID_LENOVO		0x1d49
-#endif
-
-#if !defined(PCI_VENDOR_ID_IBM)
-#define PCI_VENDOR_ID_IBM		0x1014
-#endif
-
-#if !defined(PCI_VENDOR_ID_CISCO)
-#define PCI_VENDOR_ID_CISCO		0x1137
+#if !defined(PCI_VENDOR_ID_POWERLEADER)
+#define PCI_VENDOR_ID_POWERLEADER		0x1f3a
 #endif
 
 #if !defined(PCI_VENDOR_ID_CLOUDNINE)
@@ -638,10 +660,6 @@ static inline void pqi_disable_write_same(struct scsi_device *sdev)
 
 #if !defined(PCI_VENDOR_ID_INAGILE)
 #define PCI_VENDOR_ID_INAGILE		0x1ff9
-#endif
-
-#if !defined(PCI_VENDOR_ID_POWERLEADER)
-#define PCI_VENDOR_ID_POWERLEADER		0x1f3a
 #endif
 
 #if !defined(offsetofend)

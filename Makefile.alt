@@ -118,6 +118,10 @@ OSVENDOR := $(shell \
              $(KVER_SHORT) = "5.10" ]; \
       then \
          echo "OEULER2203"; \
+      elif [ -n "`grep 'release 24.03' /etc/openEuler-release`" -a \
+             $(KVER_SHORT) = "6.6" ]; \
+      then \
+         echo "OEULER2403"; \
       fi; \
    elif [ -f /etc/os-release ]; \
    then \
@@ -230,7 +234,7 @@ MORE_CFLAGS += $(shell \
 )
 
 MORE_CFLAGS += $(shell \
-    GF=`find -L $(KDIR) -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
+    GF=`find -L $(KDIR) -path *include* -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
        echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLD_STRLCPY"; \

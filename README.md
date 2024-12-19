@@ -28,6 +28,17 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.32-035 (December 2024)
+ - Fixed an issue where drives are not taken offline when controller is
+   offline. Drives are listing in sg_map and lsblk output after controller
+   lockup.
+   - Root Cause: During a controller lockup, the physical and logical drives
+     under the locked up controller are still listed at the OS level. The
+     controller is offline, but the status of each drive is running.
+   - Fix: When the controller is unexpectedly taken offline, show its drives
+     as offline.
+   - Risk: Low
+
 Version 2.1.30-031 (July 2024)
  - Fixed an issue where during the processing of a TMF on a device, the driver
    is stuck while waiting for I/O to be drained from the driver's internal
@@ -551,5 +562,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-March 2024
+December 2024
 
