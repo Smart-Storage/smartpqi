@@ -28,6 +28,27 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.34-035 (May 2025)
+ - Fixed an issue where the kernel call trace when calling smp_processor_id()
+   in real-time kernel.
+   - Root cause: smp_processor_id() checks to see if preemption is disabled.
+     If enabled, it will issue an error message followed by a call to
+     dump_stack(). smp_processor_id() can potentially return an inaccurate CPU
+     ID if a context switch happens during its execution, while
+     raw_smp_processor_id() is designed to avoid this issue by holding a lock
+     internally while retrieving the ID. This makes it more reliable for CPU
+     identification during highly time-sensitive situations.
+   - Fix: Switch to using raw_smp_processor_id().
+   - Risk: Low
+
+ - Fixed a rare race condition between our scan thread and offline handler.
+   - Root cause: The scan thread was removing a SCSI device before the offline
+     handler could access the SCSI device pointer to set its state to OFFLINE.
+     The offline handler has been updated to check for a NULL SCSI device
+     pointer and the device list is now protected with a device_list lock.
+   - Fix: Add check for null sdev in pqi_take_ctrl_devices_offline() function.
+   - Risk: Low
+
 Version 2.1.32-035 (December 2024)
  - Fixed an issue where drives are not taken offline when controller is
    offline. Drives are listing in sg_map and lsblk output after controller
@@ -562,5 +583,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-December 2024
+May 2025
 

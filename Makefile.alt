@@ -53,8 +53,11 @@ KERNEL_CLASS := $(shell \
       if [ $(KMAJOR) -lt 1 ]; \
       then \
         echo "KCLASS$(KVERSION)A"; \
-      else \
+      elif [ $(KMAJOR) -lt 14 ]; \
+      then \
         echo "KCLASS$(KVERSION)B"; \
+      else \
+        echo "KCLASS$(KVERSION)C"; \
       fi; \
    fi; \
 )
@@ -62,7 +65,13 @@ KERNEL_CLASS := $(shell \
 OSVENDOR := $(shell \
    if [ -f /etc/redhat-release ]; \
    then \
-      if [ -n "`egrep 'Plow|release 9' /etc/redhat-release`" -a \
+      if [ -n "`egrep 'Coughlan|release 10' /etc/redhat-release`" -a \
+           $(KVER_SHORT) = "6.11" ]; \
+      then \
+         UPDATE=`grep "release 10" /etc/redhat-release | \
+            sed -r -e 's,^.* release 10.([0-9]+).*,\1,'`; \
+         echo "RHEL10U$${UPDATE}"; \
+      elif [ -n "`egrep 'Plow|release 9' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "5.14" ]; \
       then \
          UPDATE=`grep "release 9" /etc/redhat-release | \
@@ -233,11 +242,20 @@ MORE_CFLAGS += $(shell \
     fi; \
 )
 
+# Check for strlcpy
 MORE_CFLAGS += $(shell \
-    GF=`find -L $(KDIR) -path *include* -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
+    GF=`find -L $(KDIR) -path *include/linux* -not -path "*/tools/*" -not -path "*/usr/*"  -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
        echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLD_STRLCPY"; \
+    fi; \
+)
+
+MORE_CFLAGS += $(shell \
+    GF=`find -L $(KDIR)/build/include/linux -name unaligned.h | tail -1`; \
+    if [ ! -z "$$GF" ]; \
+    then \
+       echo -n "EXTRA_CFLAGS+=-DKFEATURE_LOCATION_LINUX_UNALIGNED"; \
     fi; \
 )
 

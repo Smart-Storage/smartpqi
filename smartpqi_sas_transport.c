@@ -22,7 +22,11 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_transport_sas.h>
+#if defined(KFEATURE_LOCATION_LINUX_UNALIGNED)
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 #include "smartpqi.h"
 #include "smartpqi_kernel_compat.h"
 

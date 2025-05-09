@@ -33,7 +33,11 @@
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_transport_sas.h>
 #include <scsi/scsi_dbg.h>
+#if defined(KFEATURE_LOCATION_LINUX_UNALIGNED)
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 #include "smartpqi.h"
 #include "smartpqi_sis.h"
 #include "smartpqi_kernel_compat.h"
@@ -42,10 +46,10 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.32-035"
+#define DRIVER_VERSION		"2.1.34-035"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		32
+#define DRIVER_RELEASE		34
 #define DRIVER_REVISION		35
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
@@ -63,10 +67,10 @@
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-ed14eb9/s-a29bdaf)" " (d147/s325)");
+	DRIVER_VERSION " (d-1810813/s-88324f2)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-ed14eb9/s-a29bdaf)");
+	DRIVER_VERSION " (d-1810813/s-88324f2)");
 #endif
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
@@ -5736,7 +5740,7 @@ static bool pqi_is_parity_write_stream(struct pqi_ctrl_info *ctrl_info,
 			rmd.first_block <= pqi_stream_data->next_lba + rmd.block_cnt) {
 				pqi_stream_data->next_lba = rmd.first_block + rmd.block_cnt;
 				pqi_stream_data->last_accessed = jiffies;
-				per_cpu_ptr(device->raid_io_stats, smp_processor_id())->write_stream_cnt++;
+				per_cpu_ptr(device->raid_io_stats, raw_smp_processor_id())->write_stream_cnt++;
 				return true;
 		}
 
@@ -5821,7 +5825,7 @@ int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd)
 			rc = pqi_raid_bypass_submit_scsi_cmd(ctrl_info, device, scmd, queue_group);
 			if (rc == 0 || rc == SCSI_MLQUEUE_HOST_BUSY) {
 				raid_bypassed = true;
-				per_cpu_ptr(device->raid_io_stats, smp_processor_id())->raid_bypass_cnt++;
+				per_cpu_ptr(device->raid_io_stats, raw_smp_processor_id())->raid_bypass_cnt++;
 			}
 		}
 		if (!raid_bypassed)
@@ -6237,7 +6241,11 @@ out:
 	return SUCCESS;
 }
 
+#if KFEATURE_USE_SDEV
+static int pqi_sdev_init(struct scsi_device *sdev)
+#else
 static int pqi_slave_alloc(struct scsi_device *sdev)
+#endif
 {
 	struct pqi_scsi_dev *device;
 	unsigned long flags;
@@ -6295,7 +6303,11 @@ static inline bool pqi_is_tape_changer_device(struct pqi_scsi_dev *device)
 	return device->devtype == TYPE_TAPE || device->devtype == TYPE_MEDIUM_CHANGER;
 }
 
+#if KFEATURE_USE_SDEV
+static int pqi_sdev_configure(struct scsi_device *sdev, struct queue_limits *lim)
+#else
 static int pqi_slave_configure(struct scsi_device *sdev)
+#endif
 {
 	int rc = 0;
 	struct pqi_scsi_dev *device;
@@ -6311,7 +6323,11 @@ static int pqi_slave_configure(struct scsi_device *sdev)
 	return rc;
 }
 
+#if KFEATURE_USE_SDEV
+static void pqi_sdev_destroy(struct scsi_device *sdev)
+#else
 static void pqi_slave_destroy(struct scsi_device *sdev)
+#endif
 {
 	struct pqi_ctrl_info *ctrl_info;
 	struct pqi_scsi_dev *device;
@@ -7281,9 +7297,15 @@ static struct scsi_host_template pqi_driver_template = {
 	.eh_device_reset_handler = pqi_eh_device_reset_handler,
 	.eh_abort_handler = pqi_eh_abort_handler,
 	.ioctl = pqi_ioctl,
+#if KFEATURE_USE_SDEV
+	.sdev_init = pqi_sdev_init,
+	.sdev_configure = pqi_sdev_configure,
+	.sdev_destroy = pqi_sdev_destroy,
+#else
 	.slave_alloc = pqi_slave_alloc,
 	.slave_configure = pqi_slave_configure,
 	.slave_destroy = pqi_slave_destroy,
+#endif
 	PQI_SDEV_ATTRS,
 	PQI_SHOST_ATTRS,
 	PQI_CMD_PRIV
@@ -8908,15 +8930,23 @@ static void pqi_take_ctrl_offline(struct pqi_ctrl_info *ctrl_info,
 static void pqi_take_ctrl_devices_offline(struct pqi_ctrl_info *ctrl_info)
 {
 	int rc;
+	unsigned long flags;
 	struct pqi_scsi_dev *device;
 
+	spin_lock_irqsave(&ctrl_info->scsi_device_list_lock, flags);
 	list_for_each_entry(device, &ctrl_info->scsi_device_list, scsi_device_list_entry) {
+
 		rc = list_is_last(&device->scsi_device_list_entry, &ctrl_info->scsi_device_list);
 		if (rc)
 			continue;
 
-		scsi_device_set_state(device->sdev, SDEV_OFFLINE);
+		/*
+		 * Is the sdev pointer NULL?
+		 */
+		if (device->sdev)
+			scsi_device_set_state(device->sdev, SDEV_OFFLINE);
 	}
+	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
 }
 
 static void pqi_print_ctrl_info(struct pci_dev *pci_dev,
@@ -9876,6 +9906,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	},
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_CLOUDNINE, 0x100b)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_CLOUDNINE, 0x100e)
 	},
 	{
@@ -10305,6 +10339,30 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_ADAPTEC2, 0x14f0)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4044)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4054)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4084)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4094)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4140)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4240)
 	},
 
 	{

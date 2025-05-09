@@ -23,7 +23,7 @@
 #include <scsi/scsi_device.h>
 #include "smartpqi.h"
 #include "smartpqi_kernel_compat.h"
-#if KFEATURE_ENABLE_SCSI_MAP_QUEUES
+#if KFEATURE_ENABLE_SCSI_MAP_QUEUES && !KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V5
 #include <linux/blk-mq-pci.h>
 #endif
 
@@ -151,12 +151,17 @@ static void pqi_map_queues(struct Scsi_Host *shost)
 #if KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V4
 		blk_mq_pci_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
 					ctrl_info->pci_dev, 0);
+#elif KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V5
+		return blk_mq_map_hw_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT],
+						ctrl_info->pci_dev, 0);
 #else
 	#error "A version for KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES has not been defined."
 #endif
 	} else {
 #if KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V3
 		blk_mq_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT]);
+#elif KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V5
+		return blk_mq_map_queues(&shost->tag_set.map[HCTX_TYPE_DEFAULT]);
 #else
 	#error "A version for KFEATURE_HAS_BLK_MQ_MAP_QUEUES has not been defined."
 #endif

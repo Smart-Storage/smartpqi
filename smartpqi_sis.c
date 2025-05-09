@@ -22,7 +22,11 @@
 #include <linux/delay.h>
 #include <linux/pci.h>
 #include <scsi/scsi_device.h>
+#if defined(KFEATURE_LOCATION_LINUX_UNALIGNED)
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 #include "smartpqi.h"
 #include "smartpqi_sis.h"
 
