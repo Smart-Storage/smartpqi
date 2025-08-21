@@ -28,6 +28,38 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.36-026 (August 2025)
+ - Fixed a system crash issue caused by a divide-by-zero condition.
+   - Root Cause: RAID map entries blocks_per_row and strip_size are used as
+     divisors for AIO calculations. These entries can be zero, leading to a
+     divide-by-zero issue.
+   - Fix: Moved the check for 0 value higher in the code and added an
+     additional check for rmd->strip_size.
+   - Risk: Low
+
+ - Fixed an issue where after a device has been removed, it's possible for a
+   previously scheduled work item for a LUN reset to be executed.
+   - Root Cause: A race condition occurs between scheduling a work item for a
+     LUN reset due to the abort handler being called and the device possibly
+     being removed by a call to the slave_destroy function.
+   - Fix: The solution includes the following changes:
+     - In the device reset handler function, added a check to verify if the
+       device is still in the controller's SCSI device list. If it is not, the
+       handler exits without performing any actions.
+     - In the slave destroy function, added code to cancel any scheduled TMF
+       work that has not been executed.
+     - In the slave destroy function, the device is now freed under the
+       protection of the LUN reset mutex. This prevents the device resources
+       from being freed while a LUN reset is occurring.
+   - Risk: Medium
+
+ - Added a timeout value to RAID path requests to physical devices.
+   - Root Cause: A driver change was requested to address a controller lockup
+     condition that occurs if an I/O is never completed.
+   - Fix: The driver now adds a timeout value to the requests sent to physical
+     devices through the RAID path.
+   - Risk: Low
+
 Version 2.1.34-035 (May 2025)
  - Fixed an issue where the kernel call trace when calling smp_processor_id()
    in real-time kernel.
@@ -583,5 +615,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-May 2025
+August 2025
 

@@ -134,16 +134,18 @@ OSVENDOR := $(shell \
       fi; \
    elif [ -f /etc/os-release ]; \
    then \
-      if [ -n "`grep 'Enterprise Server 15' /etc/os-release`" ]; \
+      if [ -n "`grep 'SUSE Linux Enterprise Server' /etc/os-release`" ]; \
       then \
          SVER=`grep "^VERSION_ID=" /etc/os-release | cut -d "\"" -f 2`; \
          if [ -n "`echo $$SVER | grep "\."`" ]; \
          then \
+            MAJORV=`echo $$SVER | cut -d "." -f 1`; \
             PATCHLEVEL=`echo $$SVER | cut -d "." -f 2`; \
          else \
+            MAJORV=$$SVER; \
             PATCHLEVEL="0"; \
          fi; \
-         echo "SLES15SP$${PATCHLEVEL}"; \
+         echo "SLES$${MAJORV}SP$${PATCHLEVEL}"; \
       elif [ -n "`grep 'VERSION="V10 (Sword)"' /etc/os-release`" -a \
              $(KVER_SHORT) = "4.19" ]; \
       then \
@@ -252,7 +254,7 @@ MORE_CFLAGS += $(shell \
 )
 
 MORE_CFLAGS += $(shell \
-    GF=`find -L $(KDIR)/build/include/linux -name unaligned.h | tail -1`; \
+    GF=`find -L $(KDIR) -path *include/linux* -name unaligned.h | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
        echo -n "EXTRA_CFLAGS+=-DKFEATURE_LOCATION_LINUX_UNALIGNED"; \

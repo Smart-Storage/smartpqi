@@ -46,11 +46,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.34-035"
+#define DRIVER_VERSION		"2.1.36-026"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		34
-#define DRIVER_REVISION		35
+#define DRIVER_RELEASE		36
+#define DRIVER_REVISION		26
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -67,10 +67,10 @@
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-1810813/s-88324f2)" " (d147/s325)");
+	DRIVER_VERSION " (d-e2ca321/s-68ce426)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-1810813/s-88324f2)");
+	DRIVER_VERSION " (d-e2ca321/s-68ce426)");
 #endif
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
@@ -2765,10 +2765,14 @@ static int pci_get_aio_common_raid_map_values(struct pqi_ctrl_info *ctrl_info,
 
 	rmd->data_disks_per_row = get_unaligned_le16(&raid_map->data_disks_per_row);
 	rmd->strip_size = get_unaligned_le16(&raid_map->strip_size);
+	if (rmd->strip_size == 0) /* Used as a divisor in many calculations */
+		return PQI_RAID_BYPASS_INELIGIBLE;
 	rmd->layout_map_count = get_unaligned_le16(&raid_map->layout_map_count);
 
 	/* Calculate stripe information for the request. */
 	rmd->blocks_per_row = rmd->data_disks_per_row * rmd->strip_size;
+	if (rmd->blocks_per_row == 0) /* Used as a divisor in many calculations */
+		return PQI_RAID_BYPASS_INELIGIBLE;
 	rmd->first_row = rmd->first_block / rmd->blocks_per_row;
 	rmd->last_row = rmd->last_block / rmd->blocks_per_row;
 	rmd->first_row_offset = (u32)(rmd->first_block - (rmd->first_row * rmd->blocks_per_row));
@@ -2793,9 +2797,14 @@ static int pci_get_aio_common_raid_map_values(struct pqi_ctrl_info *ctrl_info,
 static int pqi_calc_aio_r5_or_r6(struct pqi_scsi_dev_raid_map_data *rmd,
 	struct raid_map *raid_map)
 {
+	if (rmd->blocks_per_row == 0) /* Used as a divisor in many calculations */
+		return PQI_RAID_BYPASS_INELIGIBLE;
+
 	/* RAID 50/60 */
 	/* Verify first and last block are in same RAID group. */
 	rmd->stripesize = rmd->blocks_per_row * rmd->layout_map_count;
+	if (rmd->stripesize == 0) /* Used as a divisor in many calculations */
+		return PQI_RAID_BYPASS_INELIGIBLE;
 	rmd->first_group = (rmd->first_block % rmd->stripesize) / rmd->blocks_per_row;
 	rmd->last_group = (rmd->last_block % rmd->stripesize) / rmd->blocks_per_row;
 	if (rmd->first_group != rmd->last_group)
@@ -5281,14 +5290,18 @@ static void pqi_raid_io_complete(struct pqi_io_request *io_request,
 	pqi_scsi_done(scmd);
 }
 
+#define ADJUST_SECS_TIMEOUT_VALUE(tv)	(tv >= 8 ? (tv - 3) : tv)
+
 static int pqi_raid_submit_io(struct pqi_ctrl_info *ctrl_info,
 	struct pqi_scsi_dev *device, struct scsi_cmnd *scmd,
 	struct pqi_queue_group *queue_group, bool io_high_prio)
 {
 	int rc;
+	u32 timeout;
 	size_t cdb_length;
 	struct pqi_io_request *io_request;
 	struct pqi_raid_path_request *request;
+	struct request *rq;
 
 	io_request = pqi_alloc_io_request(ctrl_info, scmd);
 	if (!io_request)
@@ -5363,6 +5376,12 @@ static int pqi_raid_submit_io(struct pqi_ctrl_info *ctrl_info,
 	if (rc) {
 		pqi_free_io_request(io_request);
 		return SCSI_MLQUEUE_HOST_BUSY;
+	}
+
+	if (device->is_physical_device) {
+		rq = PQI_SCSI_REQUEST(scmd);
+		timeout = rq->timeout / HZ;
+		put_unaligned_le32(ADJUST_SECS_TIMEOUT_VALUE(timeout), &request->timeout);
 	}
 
 	pqi_start_io(ctrl_info, queue_group, RAID_PATH, io_request);
@@ -6146,9 +6165,21 @@ static int pqi_device_reset(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev
 
 static int pqi_device_reset_handler(struct pqi_ctrl_info *ctrl_info, struct pqi_scsi_dev *device, u8 lun, struct scsi_cmnd *scmd, u8 scsi_opcode)
 {
+	unsigned long flags;
 	int rc;
 
 	mutex_lock(&ctrl_info->lun_reset_mutex);
+
+	spin_lock_irqsave(&ctrl_info->scsi_device_list_lock, flags);
+	if (pqi_find_scsi_dev(ctrl_info, device->bus, device->target, device->lun) == NULL) {
+		dev_warn(&ctrl_info->pci_dev->dev,
+			"skipping reset of scsi %d:%d:%d:%u, device has been removed\n",
+			ctrl_info->scsi_host->host_no, device->bus, device->target, device->lun);
+		spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
+		mutex_unlock(&ctrl_info->lun_reset_mutex);
+		return 0;
+	}
+	spin_unlock_irqrestore(&ctrl_info->scsi_device_list_lock, flags);
 
 	dev_err(&ctrl_info->pci_dev->dev,
 		"resetting scsi %d:%d:%d:%u SCSI cmd at %p due to cmd opcode 0x%02x\n",
@@ -6331,7 +6362,9 @@ static void pqi_slave_destroy(struct scsi_device *sdev)
 {
 	struct pqi_ctrl_info *ctrl_info;
 	struct pqi_scsi_dev *device;
+	struct pqi_tmf_work *tmf_work;
 	int mutex_acquired;
+	unsigned int lun;
 	unsigned long flags;
 
 	ctrl_info = shost_to_hba(sdev->host);
@@ -6358,8 +6391,13 @@ static void pqi_slave_destroy(struct scsi_device *sdev)
 
 	mutex_unlock(&ctrl_info->scan_mutex);
 
+	for (lun = 0, tmf_work = device->tmf_work; lun < PQI_MAX_LUNS_PER_DEVICE; lun++, tmf_work++)
+		cancel_work_sync(&tmf_work->work_struct);
+
+	mutex_lock(&ctrl_info->lun_reset_mutex);
 	pqi_dev_info(ctrl_info, "removed", device);
 	pqi_free_device(device);
+	mutex_unlock(&ctrl_info->lun_reset_mutex);
 }
 
 static int pqi_getpciinfo_ioctl(struct pqi_ctrl_info *ctrl_info, void __user *arg)
@@ -10363,6 +10401,10 @@ static const struct pci_device_id pqi_pci_id_table[] = {
 	{
 		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
 			       PCI_VENDOR_ID_HRDT, 0x4240)
+	},
+	{
+		PCI_DEVICE_SUB(PCI_VENDOR_ID_ADAPTEC2, 0x028f,
+			       PCI_VENDOR_ID_HRDT, 0x4840)
 	},
 
 	{

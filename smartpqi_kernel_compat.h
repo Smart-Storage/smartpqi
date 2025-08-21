@@ -128,6 +128,12 @@
 #define SLES15
 #endif
 
+/* ----- SLES16 variants --------- */
+#if \
+	defined(SLES16SP0)
+#define SLES16
+#endif
+
 /* ----- KCLASS5 variants --------- */
 #if \
 	defined(KCLASS5A) || \
@@ -172,6 +178,10 @@
 #else
 #define KFEATURE_HAS_PCIE_CAPABILITY_SUPPORT		0
 #endif
+#endif
+
+#if defined(SLES16SP0)
+#define KFEATURE_USE_SDEV                               1
 #endif
 
 #if defined(RHEL6)
@@ -301,7 +311,7 @@
     defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(SLES15SP2) || defined(SLES15SP3) || defined(SLES15SP4) || \
     defined(SLES15SP5) || defined(SLES15SP6) || defined(SLES15SP7) || \
-    defined(RHEL9) || defined(RHEL10) || \
+    defined(RHEL9) || defined(RHEL10) || defined(SLES16SP0) || \
     defined (CENTOS7ALTARM) || defined(OEULER2203) || \
     defined(KCLASS6) || defined(K10SP2)
 #define KFEATURE_HAS_KTIME_SECONDS			1
@@ -313,7 +323,7 @@
     defined(SLES15SP5) || defined(SLES15SP6) || defined(SLES15SP7) || \
     defined(KCLASS5A) ||  defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) ||  defined(SLES12SP5) || defined (CENTOS7ALTARM) || \
-    defined(RHEL9) || defined(RHEL10) || \
+    defined(RHEL9) || defined(RHEL10) || defined(SLES16SP0) || \
     defined(OEULER2203) || defined(KCLASS6) || defined(K10SP2)
 #define KFEATURE_HAS_BSG_JOB_SMP_HANDLER		1
 #endif
@@ -329,7 +339,7 @@
 #if defined(KCLASS5A) || defined(KCLASS5B) || defined(KCLASS5C) || \
     defined(KCLASS5D) || defined(KCLASS4D) || defined(SLES15SP2) || \
     defined(SLES15SP3) || defined(SLES15SP4) || defined(SLES15SP5) || \
-    defined(SLES15SP6) || defined(SLES15SP7) || \
+    defined(SLES15SP6) || defined(SLES15SP7) || defined(SLES16SP0) || \
     defined(RHEL9) || defined(RHEL10) || \
     defined(OEULER2203) || defined(KCLASS6) || \
     defined(K10SP2)
@@ -341,7 +351,7 @@
 #if defined(KCLASS5B) || defined(KCLASS5C) || defined(KCLASS5D) || \
     defined(KCLASS4D) || defined(SLES15SP2) || defined(SLES15SP3) || \
     defined(SLES15SP4) || defined(SLES15SP5) || defined(SLES15SP6) || \
-    defined(SLES15SP7) || \
+    defined(SLES15SP7) || defined(SLES16SP0) || \
     defined(RHEL9) || defined(RHEL10) || \
     defined(OEULER2003) || defined(OEULER2403) || defined(OEULER2203) || \
     defined(KCLASS6) || defined(K10SP2)
@@ -352,7 +362,7 @@
 
 #if defined(KCLASS5C) || defined(KCLASS5D) || defined(SLES15SP4) || \
     defined(SLES15SP5) || defined(SLES15SP6) || defined(SLES15SP7) || \
-    defined(RHEL9) || defined(RHEL10) || \
+    defined(RHEL9) || defined(RHEL10) || defined(SLES16SP0) || \
     defined(OEULER2203) || defined(OEULER2403) || defined(KCLASS6)
 #define KFEATURE_HAS_HOST_BUSY_FUNCTION			1
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
