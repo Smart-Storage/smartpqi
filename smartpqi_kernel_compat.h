@@ -84,13 +84,15 @@
 	defined(RHEL9U3)    || \
 	defined(RHEL9U4)    || \
 	defined(RHEL9U5)    || \
-	defined(RHEL9U6)
+	defined(RHEL9U6)    || \
+	defined(RHEL9U7)
 #define RHEL9
 #endif
 
 /* ----- RHEL10 variants --------- */
 #if \
-	defined(RHEL10U0)
+	defined(RHEL10U0)   || \
+	defined(RHEL10U1)
 #define RHEL10
 #endif
 
@@ -211,20 +213,27 @@
 #endif
 #if defined(RHEL7U4ARM) || defined(RHEL7U5ARM)
 #endif
-#elif defined(RHEL8) || defined(RHEL9) || defined(RHEL10) || \
+#elif defined(RHEL8) || \
+      defined(RHEL9u0) || defined(RHEL9u1) || defined(RHEL9u2) || \
+      defined(RHEL9u3) || defined(RHEL9u4) || defined(RHEL9u5) || \
+      defined(RHEL9u6) || \
+      defined(RHEL10)  || \
       defined(KCLASS5) || defined(KCLASS6) || defined(OEULER2203)
 #define KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS 		1
 #define KFEATURE_HAS_MQ_SUPPORT 			1
 #define shost_use_blk_mq(x) 				1
-#if defined(KCLASS6C)
+#if defined(KCLASS6C) || defined(RHEL9u7) || defined(RHEL10U1)
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		0
 #else
 #define KFEATURE_ENABLE_SCSI_MAP_QUEUES 		1
 #endif
-#if defined(KCLASS6C)
+#if defined(KCLASS6C) || defined(RHEL10U1)
 #define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V5		1
 #define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V5 		1
 #define KFEATURE_USE_SDEV				1
+#elif defined(RHEL9U7)
+#define KFEATURE_HAS_BLK_MQ_PCI_MAP_QUEUES_V5		1
+#define KFEATURE_HAS_BLK_MQ_MAP_QUEUES_V5 		1
 #elif defined(KCLASS6B) || defined(RHEL9U2) || defined(RHEL9U3) || \
       defined(RHEL9U4) || defined(RHEL9U5) || defined(RHEL9U6) || \
       defined(RHEL10)
@@ -388,8 +397,13 @@
 
 #define KFEATURE_HAS_SCSI_SANITIZE_INQUIRY_STRING	0
 
+#if defined(KFEATURE_HAS_TIMER_CONTAINER)
+#define PQI_TIMER_CONTAINER timer_container_of
+#else
+#define PQI_TIMER_CONTAINER from_timer
 #if !defined(from_timer)
 #define KFEATURE_HAS_OLD_TIMER				1
+#endif
 #endif
 
 /* default values */
@@ -921,6 +935,12 @@ static inline bool pqi_scsi_host_busy(struct Scsi_Host *shost)
 #endif
 }
 
+#if defined(KFEATURE_HAS_TIMER_DELETE_SYNC)
+#define PQI_TIMER_SYNC timer_delete_sync
+#else
+#define PQI_TIMER_SYNC del_timer_sync
+#endif
+
 #if !KFEATURE_ENABLE_PCI_ALLOC_IRQ_VECTORS
 #if !defined(PCI_IRQ_MSIX)
 #define PCI_IRQ_MSIX		(1 << 2) /* Allow MSI-X interrupts */
@@ -950,6 +970,10 @@ static inline void *pqi_get_irq_cookie(struct pqi_ctrl_info *ctrl_info, unsigned
 #else
 #define PQI_SET_HOST_TAGSET(s) \
 	s->host_tagset = 1;
+#endif
+
+#if !defined(CCISS_BIG_PASSTHRU_SUPPORTED)
+#define CCISS_BIG_PASSTHRU_SUPPORTED _IO(CCISS_IOC_MAGIC, 19)
 #endif
 
 #endif	/* _SMARTPQI_KERNEL_COMPAT_H */

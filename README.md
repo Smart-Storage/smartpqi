@@ -28,6 +28,10 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.38-022 (December 2025)
+ - Kernel compatibility updates.
+ - Added support for larger NVMe pass-through commands used by Microchip apps.
+
 Version 2.1.36-026 (August 2025)
  - Fixed a system crash issue caused by a divide-by-zero condition.
    - Root Cause: RAID map entries blocks_per_row and strip_size are used as
@@ -615,5 +619,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-August 2025
+December 2025
 

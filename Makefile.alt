@@ -66,7 +66,7 @@ OSVENDOR := $(shell \
    if [ -f /etc/redhat-release ]; \
    then \
       if [ -n "`egrep 'Coughlan|release 10' /etc/redhat-release`" -a \
-           $(KVER_SHORT) = "6.11" ]; \
+           $(KVER_SHORT) = "6.12" ]; \
       then \
          UPDATE=`grep "release 10" /etc/redhat-release | \
             sed -r -e 's,^.* release 10.([0-9]+).*,\1,'`; \
@@ -161,9 +161,9 @@ OSVENDOR := $(shell \
 COMPAT_SWITCH := $(shell \
    if [ "$(OSVENDOR)" = "KERNEL" ]; \
    then \
-      echo "EXTRA_CFLAGS+=-D$(KERNEL_CLASS)"; \
+      echo "ccflags-y+=-D$(KERNEL_CLASS)"; \
    else \
-      echo "EXTRA_CFLAGS+=-D$(OSVENDOR)"; \
+      echo "ccflags-y+=-D$(OSVENDOR)"; \
    fi; \
 )
 ifeq (${KDIR},)
@@ -180,7 +180,7 @@ BLK := $(shell \
 MORE_CFLAGS := $(shell \
    if [ -z "$(BLK)" ]; \
    then \
-      echo "EXTRA_CFLAGS+=-DKFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH"; \
+      echo "ccflags-y+=-DKFEATURE_NEEDS_BLK_RQ_IS_PASSTHROUGH"; \
    fi; \
 )
 
@@ -192,7 +192,7 @@ FALLTHRU := $(shell \
 MORE_CFLAGS += $(shell \
    if [ ! -z "$(FALLTHRU)" ]; \
    then \
-      echo "EXTRA_CFLAGS+=-Wno-implicit-fallthrough"; \
+      echo "ccflags-y+=-Wno-implicit-fallthrough"; \
    fi; \
 )
 
@@ -200,7 +200,7 @@ MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_host.h | xargs grep scsi_done | tail -1`; \
    if [ -z "$$GF" ]; \
    then \
-      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_GLOBAL_SCSI_DONE"; \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_GLOBAL_SCSI_DONE"; \
    fi; \
 )
 
@@ -208,7 +208,7 @@ MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_cmnd.h | xargs grep scsi_cmd_to_rq | tail -1`; \
    if [ ! -z "$$GF" ]; \
    then \
-      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SCSI_CMD_TO_RQ"; \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_SCSI_CMD_TO_RQ"; \
    fi; \
 )
 
@@ -216,7 +216,7 @@ MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_cmnd.h | xargs grep scsi_cmd_priv | tail -1`; \
    if [ ! -z "$$GF" ]; \
    then \
-      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SCSI_CMD_PRIV"; \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_SCSI_CMD_PRIV"; \
    fi; \
 )
 
@@ -224,7 +224,7 @@ MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_host.h | xargs grep shost_groups | tail -1`; \
    if [ ! -z "$$GF" ]; \
    then \
-      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_SDEV_GROUPS"; \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_SDEV_GROUPS"; \
    fi; \
 )
 
@@ -232,7 +232,7 @@ MORE_CFLAGS += $(shell \
    GF=`find -L $(KDIR) -name scsi_host.h | xargs grep host_tagset | tail -1`; \
    if [ ! -z "$$GF" ]; \
    then \
-      echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_HOST_TAGSET_SUPPORT"; \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_HOST_TAGSET_SUPPORT"; \
    fi; \
 )
 
@@ -240,7 +240,7 @@ MORE_CFLAGS += $(shell \
     GF=`find -L $(KDIR) -name scsi_host.h | xargs grep 'void scsi_rescan_device' | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
-       echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLDER_SCSI_RESCAN_DEVICE"; \
+       echo -n "ccflags-y+=-DKFEATURE_HAS_OLDER_SCSI_RESCAN_DEVICE"; \
     fi; \
 )
 
@@ -249,7 +249,7 @@ MORE_CFLAGS += $(shell \
     GF=`find -L $(KDIR) -path *include/linux* -not -path "*/tools/*" -not -path "*/usr/*"  -name string.h | xargs grep 'size_t strlcpy' | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
-       echo -n "EXTRA_CFLAGS+=-DKFEATURE_HAS_OLD_STRLCPY"; \
+       echo -n "ccflags-y+=-DKFEATURE_HAS_OLD_STRLCPY"; \
     fi; \
 )
 
@@ -257,8 +257,24 @@ MORE_CFLAGS += $(shell \
     GF=`find -L $(KDIR) -path *include/linux* -name unaligned.h | tail -1`; \
     if [ ! -z "$$GF" ]; \
     then \
-       echo -n "EXTRA_CFLAGS+=-DKFEATURE_LOCATION_LINUX_UNALIGNED"; \
+       echo -n "ccflags-y+=-DKFEATURE_LOCATION_LINUX_UNALIGNED"; \
     fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name timer.h | xargs grep timer_delete_sync | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_TIMER_DELETE_SYNC"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -name timer.h | xargs grep timer_container_of | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_TIMER_CONTAINER"; \
+   fi; \
 )
 
 default:
