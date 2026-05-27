@@ -28,6 +28,9 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.40-020 (May 2026)
+ - Kernel compatibility updates.
+
 Version 2.1.38-022 (December 2025)
  - Kernel compatibility updates.
  - Added support for larger NVMe pass-through commands used by Microchip apps.
@@ -619,5 +622,5 @@ To provide kernel/driver development feedback, send email to
 storagedev@microchip.com.
 
 License: GPLv2
-December 2025
+December 2026
 

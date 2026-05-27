@@ -1726,7 +1726,12 @@ static inline struct pqi_ctrl_info *shost_to_hba(struct Scsi_Host *shost)
 
 void pqi_sas_smp_handler(struct bsg_job *job, struct Scsi_Host *shost,
 	struct sas_rphy *rphy);
-int pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd);
+#if defined(KFEATURE_HAS_SCSI_QC_STATUS)
+#define PQI_QC_STATUS	enum scsi_qc_status
+#else
+#define PQI_QC_STATUS	int
+#endif
+PQI_QC_STATUS pqi_scsi_queue_command(struct Scsi_Host *shost, struct scsi_cmnd *scmd);
 int pqi_add_sas_host(struct Scsi_Host *shost, struct pqi_ctrl_info *ctrl_info);
 void pqi_delete_sas_host(struct pqi_ctrl_info *ctrl_info);
 int pqi_add_sas_device(struct pqi_sas_node *pqi_sas_node,

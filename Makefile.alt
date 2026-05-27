@@ -59,25 +59,28 @@ KERNEL_CLASS := $(shell \
       else \
         echo "KCLASS$(KVERSION)C"; \
       fi; \
+   elif [ $(KVERSION) -eq 7 ]; \
+   then \
+      echo "KCLASS$(KVERSION)A"; \
    fi; \
 )
 
 OSVENDOR := $(shell \
    if [ -f /etc/redhat-release ]; \
    then \
-      if [ -n "`egrep 'Coughlan|release 10' /etc/redhat-release`" -a \
-           $(KVER_SHORT) = "6.12" ]; \
+      if [ -n "`grep -E 'Coughlan|release 10' /etc/redhat-release`" -a \
+           $(KVER_SHORT) = "6.12" -a -n "`echo $(KVER) | grep -v uek`" ]; \
       then \
          UPDATE=`grep "release 10" /etc/redhat-release | \
             sed -r -e 's,^.* release 10.([0-9]+).*,\1,'`; \
          echo "RHEL10U$${UPDATE}"; \
-      elif [ -n "`egrep 'Plow|release 9' /etc/redhat-release`" -a \
+      elif [ -n "`grep -E 'Plow|release 9' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "5.14" ]; \
       then \
          UPDATE=`grep "release 9" /etc/redhat-release | \
             sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
          echo "RHEL9U$${UPDATE}"; \
-      elif [ -n "`egrep 'Ootpa|release 8' /etc/redhat-release`" -a \
+      elif [ -n "`grep -E 'Ootpa|release 8' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "4.18" ]; \
       then \
          UPDATE=`grep "release 8" /etc/redhat-release | \
@@ -87,13 +90,13 @@ OSVENDOR := $(shell \
            $(KVER_SHORT) = "4.18" ]; \
       then \
          echo "CENTOS7ALTARM"; \
-      elif [ -n "`egrep 'Maipo|release 7' /etc/redhat-release`" -a \
+      elif [ -n "`grep -E 'Maipo|release 7' /etc/redhat-release`" -a \
            $(KVER_SHORT) = "3.10" ]; \
       then \
          UPDATE=`grep "release 7" /etc/redhat-release | \
             sed -r -e 's,^.* release [0-9]+.([0-9]+).*,\1,'`; \
          echo "RHEL7U$${UPDATE}"; \
-      elif [ -n "`egrep 'Santiago|release 6' /etc/redhat-release`" -a \
+      elif [ -n "`grep -E 'Santiago|release 6' /etc/redhat-release`" -a \
              $(KVER_SHORT) = "2.6" ]; \
       then \
          UPDATE=`cat /etc/redhat-release | \
@@ -274,6 +277,14 @@ MORE_CFLAGS += $(shell \
    if [ ! -z "$$GF" ]; \
    then \
       echo -n "ccflags-y+=-DKFEATURE_HAS_TIMER_CONTAINER"; \
+   fi; \
+)
+
+MORE_CFLAGS += $(shell \
+   GF=`find -L $(KDIR) -path "*/scsi/scsi.h" | xargs grep scsi_qc_status | tail -1`; \
+   if [ ! -z "$$GF" ]; \
+   then \
+      echo -n "ccflags-y+=-DKFEATURE_HAS_SCSI_QC_STATUS"; \
    fi; \
 )
 
