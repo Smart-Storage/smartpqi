@@ -433,6 +433,16 @@ struct pqi_cmd_priv *pqi_cmd_priv(struct scsi_cmnd *cmd)
 {
 	return scsi_cmd_priv(cmd);
 }
+
+#if defined(KFEATURE_HAS_INIT_CMD_PRIV)
+int pqi_init_cmd_priv(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
+{
+	struct pqi_cmd_priv *cmd_priv = pqi_cmd_priv(cmd);
+
+	memset(cmd_priv, 0, sizeof(*cmd_priv));
+	return 0;
+}
+#endif
 #endif
 
 #if !KFEATURE_HAS_HOST_TAGSET_SUPPORT

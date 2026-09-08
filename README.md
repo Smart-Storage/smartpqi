@@ -28,6 +28,9 @@ Steps for using DKMS and the smartpqi driver source with Ubuntu:
 
 ## Changelog
 
+Version 2.1.42-011 (August 2026)
+ - Kernel compatibility updates.
+
 Version 2.1.40-020 (May 2026)
  - Kernel compatibility updates.
 

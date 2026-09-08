@@ -582,12 +582,21 @@
 #	define PQI_SCSI_CMD_RESIDUAL(scmd) \
 		(scmd->SCp.this_residual)
 #else
+#	if defined(KFEATURE_HAS_INIT_CMD_PRIV)
+#		define PQI_CMD_PRIV \
+	.cmd_size = sizeof(struct pqi_cmd_priv), \
+	.init_cmd_priv = pqi_init_cmd_priv,
+#	else
 #	define PQI_CMD_PRIV \
 	.cmd_size = sizeof(struct pqi_cmd_priv),
+#	endif
 	struct pqi_cmd_priv {
 		int this_residual;
 	};
 	struct pqi_cmd_priv *pqi_cmd_priv(struct scsi_cmnd *cmd);
+#	if defined(KFEATURE_HAS_INIT_CMD_PRIV)
+	int pqi_init_cmd_priv(struct Scsi_Host *shost, struct scsi_cmnd *cmd);
+#	endif
 #	define PQI_SCSI_CMD_RESIDUAL(scmd) \
 		pqi_cmd_priv(scmd)->this_residual
 #endif

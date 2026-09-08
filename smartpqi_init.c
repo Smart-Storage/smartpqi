@@ -46,11 +46,11 @@
 #define BUILD_TIMESTAMP
 #endif
 
-#define DRIVER_VERSION		"2.1.40-020"
+#define DRIVER_VERSION		"2.1.42-011"
 #define DRIVER_MAJOR		2
 #define DRIVER_MINOR		1
-#define DRIVER_RELEASE		40
-#define DRIVER_REVISION		20
+#define DRIVER_RELEASE		42
+#define DRIVER_REVISION		11
 
 #define DRIVER_NAME		"Microchip SmartPQI Driver (v" \
 				DRIVER_VERSION BUILD_TIMESTAMP ")"
@@ -67,10 +67,10 @@
 MODULE_AUTHOR("Microchip");
 #if TORTUGA
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-27021b8/s-1cc972d)" " (d147/s325)");
+	DRIVER_VERSION " (d-447bb81/s-c11f481)" " (d147/s325)");
 #else
 MODULE_DESCRIPTION("Driver for Microchip Smart Family Controller version "
-	DRIVER_VERSION " (d-27021b8/s-1cc972d)");
+	DRIVER_VERSION " (d-447bb81/s-c11f481)");
 #endif
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
@@ -5685,6 +5685,17 @@ void pqi_prep_for_scsi_done(struct scsi_cmnd *scmd)
 	struct pqi_ctrl_info *ctrl_info;
 	struct Scsi_Host *shost;
 	struct completion *wait;
+
+	/*
+	 * Clear the AIO-retry marker on final completion so the tag
+	 * starts clean on its next dispatch.  On DID_IMM_RETRY leave
+	 * it intact: pqi_aio_io_complete() sets DID_IMM_RETRY and
+	 * bumps the marker to steer the requeue onto the RAID path,
+	 * and pqi_process_raid_io_error() consumes the non-zero
+	 * marker to offline a misbehaving drive.
+	 */
+	if (host_byte(scmd->result) != DID_IMM_RETRY)
+		PQI_SCSI_CMD_RESIDUAL(scmd) = 0;
 
 	if (!scmd->device) {
 		set_host_byte(scmd, DID_NO_CONNECT);
